@@ -11,8 +11,8 @@ from thetokencompany._client import TheTokenCompany
 from thetokencompany._compress import (
     DEFAULT_AGGRESSIVENESS,
     Aggressiveness,
-    _AsyncAnalyticsTTC,
     _AnalyticsTTC,
+    _AsyncAnalyticsTTC,
     _resolve_aggressiveness,
     compress_openai_messages,
     compress_openai_messages_async,

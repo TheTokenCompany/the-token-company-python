@@ -12,7 +12,7 @@ from thetokencompany._exceptions import (
     RequestTooLargeError,
     TheTokenCompanyError,
 )
-from thetokencompany._types import CompressResponse, CompressionStats, TurnStats, protect
+from thetokencompany._types import CompressionStats, CompressResponse, TurnStats, protect
 
 __version__ = "0.1.0"
 

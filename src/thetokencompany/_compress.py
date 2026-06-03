@@ -7,7 +7,7 @@ from typing import Any
 
 from thetokencompany._async_client import AsyncTheTokenCompany
 from thetokencompany._client import TheTokenCompany
-from thetokencompany._types import CompressResponse, CompressionStats
+from thetokencompany._types import CompressionStats, CompressResponse
 
 DEFAULT_AGGRESSIVENESS = 0.2
 DEFAULT_ROLES = ("user", "system", "tool")
