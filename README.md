@@ -88,8 +88,6 @@ async with AsyncTheTokenCompany(api_key="ttc-...") as client:
 |------------|------------------------|
 | `bear-2`   | Latest, recommended    |
 | `bear-1.2` | Previous generation    |
-| `bear-1.1` | Legacy                 |
-| `bear-1`   | Legacy                 |
 
 ## Aggressiveness
 
