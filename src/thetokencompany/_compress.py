@@ -15,7 +15,7 @@ DEFAULT_ROLES = ("user", "system", "tool")
 Aggressiveness = float | dict[str, float]
 
 
-class _AnalyticsTTC:
+class _StatsTTC:
     """Wraps TheTokenCompany to collect compression analytics."""
 
     def __init__(self, inner: TheTokenCompany, stats: CompressionStats) -> None:
@@ -28,7 +28,7 @@ class _AnalyticsTTC:
         return result
 
 
-class _AsyncAnalyticsTTC:
+class _AsyncStatsTTC:
     """Wraps AsyncTheTokenCompany to collect compression analytics."""
 
     def __init__(self, inner: AsyncTheTokenCompany, stats: CompressionStats) -> None:

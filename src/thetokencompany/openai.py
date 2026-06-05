@@ -11,9 +11,9 @@ from thetokencompany._client import TheTokenCompany
 from thetokencompany._compress import (
     DEFAULT_AGGRESSIVENESS,
     Aggressiveness,
-    _AnalyticsTTC,
-    _AsyncAnalyticsTTC,
+    _AsyncStatsTTC,
     _resolve_aggressiveness,
+    _StatsTTC,
     compress_openai_messages,
     compress_openai_messages_async,
 )
@@ -47,30 +47,30 @@ def with_compression(
     original_create = client.chat.completions.create
 
     if inspect.iscoroutinefunction(original_create):
-        ttc = AsyncTheTokenCompany(api_key=compression_api_key, app_id=app_id)
-        tracker = _AsyncAnalyticsTTC(ttc, stats)
+        async_ttc = AsyncTheTokenCompany(api_key=compression_api_key, app_id=app_id)
+        compressor: Any = _AsyncStatsTTC(async_ttc, stats)
 
         @functools.wraps(original_create)
         async def async_create(*args: Any, **kwargs: Any) -> Any:
             if "messages" in kwargs:
                 stats._start_turn()
                 kwargs["messages"] = await compress_openai_messages_async(
-                    tracker, kwargs["messages"], model, role_aggr  # type: ignore[arg-type]
+                    compressor, kwargs["messages"], model, role_aggr
                 )
                 stats._end_turn()
             return await original_create(*args, **kwargs)
 
         client.chat.completions.create = async_create
     else:
-        ttc = TheTokenCompany(api_key=compression_api_key, app_id=app_id)
-        tracker = _AnalyticsTTC(ttc, stats)  # type: ignore[assignment]
+        sync_ttc = TheTokenCompany(api_key=compression_api_key, app_id=app_id)
+        compressor = _StatsTTC(sync_ttc, stats)
 
         @functools.wraps(original_create)
         def sync_create(*args: Any, **kwargs: Any) -> Any:
             if "messages" in kwargs:
                 stats._start_turn()
                 kwargs["messages"] = compress_openai_messages(
-                    tracker, kwargs["messages"], model, role_aggr  # type: ignore[arg-type]
+                    compressor, kwargs["messages"], model, role_aggr
                 )
                 stats._end_turn()
             return original_create(*args, **kwargs)

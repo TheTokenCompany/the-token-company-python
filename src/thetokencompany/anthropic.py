@@ -11,11 +11,11 @@ from thetokencompany._client import TheTokenCompany
 from thetokencompany._compress import (
     DEFAULT_AGGRESSIVENESS,
     Aggressiveness,
-    _AnalyticsTTC,
-    _AsyncAnalyticsTTC,
+    _AsyncStatsTTC,
     _compress_text_blocks,
     _compress_text_blocks_async,
     _resolve_aggressiveness,
+    _StatsTTC,
     compress_anthropic_messages,
     compress_anthropic_messages_async,
     compress_text,
@@ -51,50 +51,50 @@ def with_compression(
     original_create = client.messages.create
 
     if inspect.iscoroutinefunction(original_create):
-        ttc = AsyncTheTokenCompany(api_key=compression_api_key, app_id=app_id)
-        tracker = _AsyncAnalyticsTTC(ttc, stats)
+        async_ttc = AsyncTheTokenCompany(api_key=compression_api_key, app_id=app_id)
+        compressor: Any = _AsyncStatsTTC(async_ttc, stats)
 
         @functools.wraps(original_create)
         async def async_create(*args: Any, **kwargs: Any) -> Any:
             stats._start_turn()
             if "messages" in kwargs:
                 kwargs["messages"] = await compress_anthropic_messages_async(
-                    tracker, kwargs["messages"], model, role_aggr  # type: ignore[arg-type]
+                    compressor, kwargs["messages"], model, role_aggr
                 )
             if system_aggr is not None and "system" in kwargs:
                 system = kwargs["system"]
                 if isinstance(system, str):
                     kwargs["system"] = await compress_text_async(
-                        tracker, system, model, system_aggr  # type: ignore[arg-type]
+                        compressor, system, model, system_aggr
                     )
                 elif isinstance(system, list):
                     kwargs["system"] = await _compress_text_blocks_async(
-                        tracker, system, model, system_aggr  # type: ignore[arg-type]
+                        compressor, system, model, system_aggr
                     )
             stats._end_turn()
             return await original_create(*args, **kwargs)
 
         client.messages.create = async_create
     else:
-        ttc = TheTokenCompany(api_key=compression_api_key, app_id=app_id)
-        tracker = _AnalyticsTTC(ttc, stats)  # type: ignore[assignment]
+        sync_ttc = TheTokenCompany(api_key=compression_api_key, app_id=app_id)
+        compressor = _StatsTTC(sync_ttc, stats)
 
         @functools.wraps(original_create)
         def sync_create(*args: Any, **kwargs: Any) -> Any:
             stats._start_turn()
             if "messages" in kwargs:
                 kwargs["messages"] = compress_anthropic_messages(
-                    tracker, kwargs["messages"], model, role_aggr  # type: ignore[arg-type]
+                    compressor, kwargs["messages"], model, role_aggr
                 )
             if system_aggr is not None and "system" in kwargs:
                 system = kwargs["system"]
                 if isinstance(system, str):
                     kwargs["system"] = compress_text(
-                        tracker, system, model, system_aggr  # type: ignore[arg-type]
+                        compressor, system, model, system_aggr
                     )
                 elif isinstance(system, list):
                     kwargs["system"] = _compress_text_blocks(
-                        tracker, system, model, system_aggr  # type: ignore[arg-type]
+                        compressor, system, model, system_aggr
                     )
             stats._end_turn()
             return original_create(*args, **kwargs)
