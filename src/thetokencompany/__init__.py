@@ -14,7 +14,7 @@ from thetokencompany._exceptions import (
 )
 from thetokencompany._types import CompressionStats, CompressResponse, TurnStats, protect
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "AsyncTheTokenCompany",

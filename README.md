@@ -99,6 +99,24 @@ Control compression intensity with `aggressiveness` (0.0 – 1.0, default 0.5):
 result = client.compress(text, model="bear-2", aggressiveness=0.8)
 ```
 
+## App ID
+
+Tag compression requests with an application identifier for usage tracking:
+
+```python
+# Set on the client — applies to all requests
+client = TheTokenCompany(api_key="ttc-...", app_id="my-chatbot")
+
+# Or per-request (overrides the client-level value)
+result = client.compress(text, model="bear-2", app_id="my-chatbot")
+```
+
+Also supported in wrappers:
+
+```python
+client = with_compression(OpenAI(), compression_api_key="ttc-...", app_id="my-chatbot")
+```
+
 ## Gzip
 
 Enable gzip compression of request payloads for better performance on large inputs (up to 2.2x faster on 1M+ tokens):

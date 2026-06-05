@@ -31,6 +31,7 @@ def with_compression(
     compression_api_key: str,
     model: str = BEAR_2,
     aggressiveness: Aggressiveness = DEFAULT_AGGRESSIVENESS,
+    app_id: str | None = None,
 ) -> Any:
     """Wrap an Anthropic client to auto-compress messages.
 
@@ -50,7 +51,7 @@ def with_compression(
     original_create = client.messages.create
 
     if inspect.iscoroutinefunction(original_create):
-        tracker = _AsyncAnalyticsTTC(AsyncTheTokenCompany(api_key=compression_api_key), stats)
+        tracker = _AsyncAnalyticsTTC(AsyncTheTokenCompany(api_key=compression_api_key, app_id=app_id), stats)
 
         @functools.wraps(original_create)
         async def async_create(*args: Any, **kwargs: Any) -> Any:
@@ -74,7 +75,7 @@ def with_compression(
 
         client.messages.create = async_create
     else:
-        tracker = _AnalyticsTTC(TheTokenCompany(api_key=compression_api_key), stats)  # type: ignore[assignment]
+        tracker = _AnalyticsTTC(TheTokenCompany(api_key=compression_api_key, app_id=app_id), stats)  # type: ignore[assignment]
 
         @functools.wraps(original_create)
         def sync_create(*args: Any, **kwargs: Any) -> Any:

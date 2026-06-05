@@ -44,16 +44,20 @@ def _build_payload(
     text: str,
     model: str,
     aggressiveness: float,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     if not text or not text.strip():
         raise InvalidRequestError("text cannot be empty")
     if not 0.0 <= aggressiveness <= 1.0:
         raise InvalidRequestError("aggressiveness must be between 0.0 and 1.0")
-    return {
+    payload: dict[str, Any] = {
         "model": model,
         "input": text,
         "compression_settings": {"aggressiveness": aggressiveness},
     }
+    if app_id is not None:
+        payload["app_id"] = app_id
+    return payload
 
 
 class TheTokenCompany:
@@ -75,9 +79,11 @@ class TheTokenCompany:
         base_url: str = BASE_URL,
         timeout: int = DEFAULT_TIMEOUT,
         gzip: bool = True,
+        app_id: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._gzip = gzip
+        self._app_id = app_id
         headers: dict[str, str] = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -100,6 +106,7 @@ class TheTokenCompany:
         *,
         model: str = "bear-2",
         aggressiveness: float = 0.2,
+        app_id: str | None = None,
     ) -> CompressResponse:
         """Compress *text* for cheaper / faster LLM inference.
 
@@ -107,11 +114,13 @@ class TheTokenCompany:
             text: The prompt or content to compress.
             model: Compression model (``bear-1``, ``bear-1.1``, ``bear-1.2``, ``bear-2``).
             aggressiveness: 0.0 (lightest) to 1.0 (most aggressive). Default 0.2.
+            app_id: Optional application identifier (max 255 chars). Overrides client-level app_id.
 
         Returns:
             A :class:`CompressResponse` with the compressed output and token metrics.
         """
-        payload = _build_payload(text, model, aggressiveness)
+        resolved_app_id = app_id if app_id is not None else self._app_id
+        payload = _build_payload(text, model, aggressiveness, app_id=resolved_app_id)
         response = self._client.post(
             f"{self._base_url}/v1/compress",
             content=self._encode(payload),
