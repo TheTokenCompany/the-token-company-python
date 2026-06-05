@@ -2,6 +2,13 @@
 
 Compress LLM prompts to reduce costs and latency. 100K tokens compressed in ~85ms.
 
+[![PyPI version](https://img.shields.io/pypi/v/the-token-company)](https://pypi.org/project/the-token-company/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/the-token-company)](https://pypi.org/project/the-token-company/)
+[![Python versions](https://img.shields.io/pypi/pyversions/the-token-company)](https://pypi.org/project/the-token-company/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/TheTokenCompany/the-token-company-python/blob/main/LICENSE)
+
+[Docs](https://thetokencompany.com/docs) · [Website](https://thetokencompany.com) · [Dashboard](https://app.thetokencompany.com) · [Node.js SDK](https://github.com/TheTokenCompany/the-token-company-node)
+
 ## Install
 
 ```bash
