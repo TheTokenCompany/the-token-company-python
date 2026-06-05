@@ -47,7 +47,8 @@ def with_compression(
     original_create = client.chat.completions.create
 
     if inspect.iscoroutinefunction(original_create):
-        tracker = _AsyncAnalyticsTTC(AsyncTheTokenCompany(api_key=compression_api_key, app_id=app_id), stats)
+        ttc = AsyncTheTokenCompany(api_key=compression_api_key, app_id=app_id)
+        tracker = _AsyncAnalyticsTTC(ttc, stats)
 
         @functools.wraps(original_create)
         async def async_create(*args: Any, **kwargs: Any) -> Any:
@@ -61,7 +62,8 @@ def with_compression(
 
         client.chat.completions.create = async_create
     else:
-        tracker = _AnalyticsTTC(TheTokenCompany(api_key=compression_api_key, app_id=app_id), stats)  # type: ignore[assignment]
+        ttc = TheTokenCompany(api_key=compression_api_key, app_id=app_id)
+        tracker = _AnalyticsTTC(ttc, stats)  # type: ignore[assignment]
 
         @functools.wraps(original_create)
         def sync_create(*args: Any, **kwargs: Any) -> Any:
