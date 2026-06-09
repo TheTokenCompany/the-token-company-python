@@ -34,7 +34,8 @@ def with_compression(
     model: str = BEAR_2,
     aggressiveness: Aggressiveness = DEFAULT_AGGRESSIVENESS,
     app_id: str | None = None,
-    http_client: httpx.Client | httpx.AsyncClient | None = None,
+    http_client: httpx.Client | None = None,
+    async_http_client: httpx.AsyncClient | None = None,
 ) -> Any:
     """Wrap an Anthropic client to auto-compress messages.
 
@@ -55,7 +56,9 @@ def with_compression(
 
     if inspect.iscoroutinefunction(original_create):
         async_ttc = AsyncTheTokenCompany(
-            api_key=compression_api_key, app_id=app_id, http_client=http_client,
+            api_key=compression_api_key,
+            app_id=app_id,
+            http_client=async_http_client,
         )
         compressor: Any = _AsyncStatsTTC(async_ttc, stats)
 
