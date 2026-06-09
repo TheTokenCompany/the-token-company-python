@@ -50,7 +50,9 @@ def with_compression(
     original_create = client.chat.completions.create
 
     if inspect.iscoroutinefunction(original_create):
-        async_ttc = AsyncTheTokenCompany(api_key=compression_api_key, app_id=app_id, http_client=http_client)
+        async_ttc = AsyncTheTokenCompany(
+            api_key=compression_api_key, app_id=app_id, http_client=http_client,
+        )
         compressor: Any = _AsyncStatsTTC(async_ttc, stats)
 
         @functools.wraps(original_create)
@@ -65,7 +67,9 @@ def with_compression(
 
         client.chat.completions.create = async_create
     else:
-        sync_ttc = TheTokenCompany(api_key=compression_api_key, app_id=app_id, http_client=http_client)
+        sync_ttc = TheTokenCompany(
+            api_key=compression_api_key, app_id=app_id, http_client=http_client,
+        )
         compressor = _StatsTTC(sync_ttc, stats)
 
         @functools.wraps(original_create)
