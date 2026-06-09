@@ -6,6 +6,8 @@ import functools
 import inspect
 from typing import Any
 
+import httpx
+
 from thetokencompany._async_client import AsyncTheTokenCompany
 from thetokencompany._client import TheTokenCompany
 from thetokencompany._compress import (
@@ -32,6 +34,7 @@ def with_compression(
     model: str = BEAR_2,
     aggressiveness: Aggressiveness = DEFAULT_AGGRESSIVENESS,
     app_id: str | None = None,
+    http_client: httpx.Client | httpx.AsyncClient | None = None,
 ) -> Any:
     """Wrap an Anthropic client to auto-compress messages.
 
@@ -51,7 +54,7 @@ def with_compression(
     original_create = client.messages.create
 
     if inspect.iscoroutinefunction(original_create):
-        async_ttc = AsyncTheTokenCompany(api_key=compression_api_key, app_id=app_id)
+        async_ttc = AsyncTheTokenCompany(api_key=compression_api_key, app_id=app_id, http_client=http_client)
         compressor: Any = _AsyncStatsTTC(async_ttc, stats)
 
         @functools.wraps(original_create)
@@ -76,7 +79,7 @@ def with_compression(
 
         client.messages.create = async_create
     else:
-        sync_ttc = TheTokenCompany(api_key=compression_api_key, app_id=app_id)
+        sync_ttc = TheTokenCompany(api_key=compression_api_key, app_id=app_id, http_client=http_client)
         compressor = _StatsTTC(sync_ttc, stats)
 
         @functools.wraps(original_create)

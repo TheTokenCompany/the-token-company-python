@@ -80,6 +80,7 @@ class TheTokenCompany:
         timeout: int = DEFAULT_TIMEOUT,
         gzip: bool = True,
         app_id: str | None = None,
+        http_client: httpx.Client | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._gzip = gzip
@@ -90,7 +91,11 @@ class TheTokenCompany:
         }
         if gzip:
             headers["Content-Encoding"] = "gzip"
-        self._client = httpx.Client(headers=headers, timeout=timeout)
+        if http_client is not None:
+            self._client = http_client
+            self._client.headers.update(headers)
+        else:
+            self._client = httpx.Client(headers=headers, timeout=timeout)
 
     def _encode(self, payload: dict[str, Any]) -> bytes:
         raw = json.dumps(payload).encode()
