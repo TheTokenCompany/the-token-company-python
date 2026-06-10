@@ -239,7 +239,7 @@ def _compress_anthropic_msg(
         if isinstance(content, list):
             blocks = _compress_assistant_blocks(
                 ttc, content, model, assistant_aggr,
-                strip_server_tool_results, max_search_results,
+                strip_server_tool_results,
             )
             return {**message, "content": blocks}
         return message
@@ -293,7 +293,7 @@ async def _compress_anthropic_msg_async(
         if isinstance(content, list):
             blocks = await _compress_assistant_blocks_async(
                 ttc, content, model, assistant_aggr,
-                strip_server_tool_results, max_search_results,
+                strip_server_tool_results,
             )
             return {**message, "content": blocks}
         return message

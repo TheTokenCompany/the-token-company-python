@@ -7,7 +7,7 @@ import httpx
 
 from thetokencompany._client import _build_payload, _parse_error
 from thetokencompany._constants import BASE_URL, DEFAULT_TIMEOUT
-from thetokencompany._types import CompressResponse
+from thetokencompany._types import CompressResponse, SearchResponse
 
 
 class AsyncTheTokenCompany:
@@ -83,6 +83,50 @@ class AsyncTheTokenCompany:
         if not response.is_success:
             raise _parse_error(response)
         return CompressResponse.from_dict(response.json())
+
+    async def search(
+        self,
+        query: str,
+        *,
+        max_results: int = 5,
+        search_depth: str = "basic",
+        include_raw_content: bool = False,
+        model: str = "bear-2",
+        aggressiveness: float = 0.3,
+        app_id: str | None = None,
+    ) -> SearchResponse:
+        """Search the web and return compressed results.
+
+        Args:
+            query: The search query string.
+            max_results: Maximum number of results to return (default 5).
+            search_depth: Search depth (``basic`` or ``advanced``).
+            include_raw_content: Whether to include raw page content.
+            model: Compression model. Default ``bear-2``.
+            aggressiveness: Compression aggressiveness (0.0 to 1.0). Default 0.3.
+            app_id: Optional application identifier. Overrides client-level app_id.
+
+        Returns:
+            A :class:`SearchResponse` with compressed search results and token metrics.
+        """
+        resolved_app_id = app_id if app_id is not None else self._app_id
+        payload: dict[str, Any] = {
+            "query": query,
+            "max_results": max_results,
+            "search_depth": search_depth,
+            "include_raw_content": include_raw_content,
+            "model": model,
+            "compression_settings": {"aggressiveness": aggressiveness},
+        }
+        if resolved_app_id is not None:
+            payload["app_id"] = resolved_app_id
+        response = await self._client.post(
+            f"{self._base_url}/v1/search",
+            content=self._encode(payload),
+        )
+        if not response.is_success:
+            raise _parse_error(response)
+        return SearchResponse.from_dict(response.json())
 
     async def close(self) -> None:
         await self._client.aclose()

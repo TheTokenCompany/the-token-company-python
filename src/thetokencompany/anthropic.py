@@ -23,7 +23,7 @@ from thetokencompany._compress import (
     compress_text,
     compress_text_async,
 )
-from thetokencompany._constants import BEAR_2
+from thetokencompany._constants import BASE_URL, BEAR_2
 from thetokencompany._types import CompressionStats
 
 
@@ -35,6 +35,7 @@ def with_compression(
     aggressiveness: Aggressiveness = DEFAULT_AGGRESSIVENESS,
     compress_assistant: bool = False,
     strip_server_tool_results: bool = False,
+    base_url: str = BASE_URL,
     app_id: str | None = None,
     http_client: httpx.Client | None = None,
     async_http_client: httpx.AsyncClient | None = None,
@@ -70,6 +71,7 @@ def with_compression(
     if inspect.iscoroutinefunction(original_create):
         async_ttc = AsyncTheTokenCompany(
             api_key=compression_api_key,
+            base_url=base_url,
             app_id=app_id,
             http_client=async_http_client,
         )
@@ -99,7 +101,8 @@ def with_compression(
         client.messages.create = async_create
     else:
         sync_ttc = TheTokenCompany(
-            api_key=compression_api_key, app_id=app_id, http_client=http_client,
+            api_key=compression_api_key, base_url=base_url, app_id=app_id,
+            http_client=http_client,
         )
         compressor = _StatsTTC(sync_ttc, stats)
 

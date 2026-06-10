@@ -12,7 +12,14 @@ from thetokencompany._exceptions import (
     RequestTooLargeError,
     TheTokenCompanyError,
 )
-from thetokencompany._types import CompressionStats, CompressResponse, TurnStats, protect
+from thetokencompany._types import (
+    CompressionStats,
+    CompressResponse,
+    SearchResponse,
+    SearchResult,
+    TurnStats,
+    protect,
+)
 
 __version__ = "0.2.4"
 
@@ -21,6 +28,8 @@ __all__ = [
     "TheTokenCompany",
     "CompressResponse",
     "CompressionStats",
+    "SearchResponse",
+    "SearchResult",
     "TurnStats",
     "protect",
     "BEAR_1",
