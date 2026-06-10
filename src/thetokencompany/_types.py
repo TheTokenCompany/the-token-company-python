@@ -34,6 +34,50 @@ class CompressResponse:
 
 
 @dataclass(frozen=True, slots=True)
+class SearchResult:
+    """A single compressed web search result."""
+
+    url: str
+    title: str
+    content: str
+    score: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SearchResponse:
+    """Result of a search request."""
+
+    results: list[SearchResult]
+    query: str
+    search_time: float = 0
+    original_input_tokens: int = 0
+    output_tokens: int = 0
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SearchResponse:
+        results = [
+            SearchResult(
+                url=r["url"],
+                title=r["title"],
+                content=r["content"],
+                score=r.get("score"),
+            )
+            for r in data.get("results", [])
+        ]
+        return cls(
+            results=results,
+            query=data.get("query", ""),
+            search_time=data.get("search_time", 0),
+            original_input_tokens=data.get("original_input_tokens", 0),
+            output_tokens=data.get("output_tokens", 0),
+        )
+
+    @property
+    def tokens_saved(self) -> int:
+        return self.original_input_tokens - self.output_tokens
+
+
+@dataclass(frozen=True, slots=True)
 class TurnStats:
     """Stats from a single create() call."""
 
