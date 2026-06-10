@@ -11,6 +11,7 @@ from thetokencompany._types import CompressionStats, CompressResponse
 
 DEFAULT_AGGRESSIVENESS = 0.2
 DEFAULT_ROLES = ("user", "system", "tool")
+_SERVER_TOOL_BLOCK_TYPES = frozenset({"web_search_tool_result", "server_tool_use"})
 
 Aggressiveness = float | dict[str, float]
 
@@ -176,8 +177,18 @@ def compress_anthropic_messages(
     messages: list[dict[str, Any]],
     model: str,
     role_aggr: dict[str, float],
+    *,
+    strip_server_tool_results: bool = False,
+    max_search_results: int | None = None,
 ) -> list[dict[str, Any]]:
-    return [_compress_anthropic_msg(ttc, m, model, role_aggr) for m in messages]
+    return [
+        _compress_anthropic_msg(
+            ttc, m, model, role_aggr,
+            strip_server_tool_results=strip_server_tool_results,
+            max_search_results=max_search_results,
+        )
+        for m in messages
+    ]
 
 
 async def compress_anthropic_messages_async(
@@ -185,8 +196,18 @@ async def compress_anthropic_messages_async(
     messages: list[dict[str, Any]],
     model: str,
     role_aggr: dict[str, float],
+    *,
+    strip_server_tool_results: bool = False,
+    max_search_results: int | None = None,
 ) -> list[dict[str, Any]]:
-    tasks = [_compress_anthropic_msg_async(ttc, m, model, role_aggr) for m in messages]
+    tasks = [
+        _compress_anthropic_msg_async(
+            ttc, m, model, role_aggr,
+            strip_server_tool_results=strip_server_tool_results,
+            max_search_results=max_search_results,
+        )
+        for m in messages
+    ]
     return list(await asyncio.gather(*tasks))
 
 
@@ -195,8 +216,34 @@ def _compress_anthropic_msg(
     message: dict[str, Any],
     model: str,
     role_aggr: dict[str, float],
+    *,
+    strip_server_tool_results: bool = False,
+    max_search_results: int | None = None,
 ) -> dict[str, Any]:
     role = message.get("role", "")
+
+    if role == "assistant":
+        assistant_aggr = role_aggr.get("assistant")
+        needs_processing = (
+            assistant_aggr is not None
+            or strip_server_tool_results
+            or max_search_results is not None
+        )
+        content = message.get("content")
+        if content is None or not needs_processing:
+            return message
+        if isinstance(content, str):
+            if assistant_aggr is not None:
+                return {**message, "content": compress_text(ttc, content, model, assistant_aggr)}
+            return message
+        if isinstance(content, list):
+            blocks = _compress_assistant_blocks(
+                ttc, content, model, assistant_aggr,
+                strip_server_tool_results, max_search_results,
+            )
+            return {**message, "content": blocks}
+        return message
+
     if role != "user":
         return message
 
@@ -223,8 +270,34 @@ async def _compress_anthropic_msg_async(
     message: dict[str, Any],
     model: str,
     role_aggr: dict[str, float],
+    *,
+    strip_server_tool_results: bool = False,
+    max_search_results: int | None = None,
 ) -> dict[str, Any]:
     role = message.get("role", "")
+
+    if role == "assistant":
+        assistant_aggr = role_aggr.get("assistant")
+        needs_processing = (
+            assistant_aggr is not None
+            or strip_server_tool_results
+            or max_search_results is not None
+        )
+        content = message.get("content")
+        if content is None or not needs_processing:
+            return message
+        if isinstance(content, str):
+            if assistant_aggr is not None:
+                return {**message, "content": await compress_text_async(ttc, content, model, assistant_aggr)}
+            return message
+        if isinstance(content, list):
+            blocks = await _compress_assistant_blocks_async(
+                ttc, content, model, assistant_aggr,
+                strip_server_tool_results, max_search_results,
+            )
+            return {**message, "content": blocks}
+        return message
+
     if role != "user":
         return message
 
@@ -244,6 +317,56 @@ async def _compress_anthropic_msg_async(
         blocks = await _compress_anthropic_blocks_async(ttc, content, model, user_aggr, tool_aggr)
         return {**message, "content": blocks}
     return message
+
+
+def _compress_assistant_blocks(
+    ttc: TheTokenCompany,
+    blocks: list[Any],
+    model: str,
+    assistant_aggr: float | None,
+    strip_server_tool_results: bool,
+) -> list[Any]:
+    result = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            result.append(block)
+            continue
+        btype = block.get("type")
+        if strip_server_tool_results and btype in _SERVER_TOOL_BLOCK_TYPES:
+            continue
+        if btype == "text" and assistant_aggr is not None:
+            text = block.get("text", "")
+            result.append({**block, "text": compress_text(ttc, text, model, assistant_aggr)})
+        else:
+            result.append(block)
+    if not result:
+        return blocks
+    return result
+
+
+async def _compress_assistant_blocks_async(
+    ttc: AsyncTheTokenCompany,
+    blocks: list[Any],
+    model: str,
+    assistant_aggr: float | None,
+    strip_server_tool_results: bool,
+) -> list[Any]:
+    async def _do(block: Any) -> Any | None:
+        if not isinstance(block, dict):
+            return block
+        btype = block.get("type")
+        if strip_server_tool_results and btype in _SERVER_TOOL_BLOCK_TYPES:
+            return None
+        if btype == "text" and assistant_aggr is not None:
+            text = block.get("text", "")
+            return {**block, "text": await compress_text_async(ttc, text, model, assistant_aggr)}
+        return block
+
+    results = await asyncio.gather(*[_do(b) for b in blocks])
+    filtered = [r for r in results if r is not None]
+    if not filtered:
+        return blocks
+    return filtered
 
 
 def _compress_anthropic_blocks(

@@ -364,6 +364,231 @@ class TestAnthropicWrapper:
         assert call_kwargs["messages"][1]["content"] == "original response"
 
 
+class TestAnthropicServerToolStripping:
+    def test_strip_server_tool_results_removes_both_block_types(self) -> None:
+        from thetokencompany._compress import compress_anthropic_messages
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "server_tool_use", "id": "srvtoolu_123", "name": "web_search", "input": {"query": "test"}},
+                    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_123", "content": [
+                        {"type": "web_search_result", "url": "https://example.com", "title": "Example", "encrypted_content": "abc123"}
+                    ]},
+                    {"type": "text", "text": "Here are the results."},
+                ],
+            },
+        ]
+        ttc = MagicMock()
+        result = compress_anthropic_messages(
+            ttc, messages, "bear-2", {"user": 0.2, "tool": 0.2},
+            strip_server_tool_results=True,
+        )
+
+        blocks = result[0]["content"]
+        assert len(blocks) == 1
+        assert blocks[0]["type"] == "text"
+        assert blocks[0]["text"] == "Here are the results."
+
+    def test_strip_disabled_preserves_all_blocks(self) -> None:
+        from thetokencompany._compress import compress_anthropic_messages
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "server_tool_use", "id": "srvtoolu_123", "name": "web_search", "input": {"query": "test"}},
+                    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_123", "content": []},
+                    {"type": "text", "text": "Results."},
+                ],
+            },
+        ]
+        ttc = MagicMock()
+        result = compress_anthropic_messages(
+            ttc, messages, "bear-2", {"user": 0.2},
+            strip_server_tool_results=False,
+        )
+
+        blocks = result[0]["content"]
+        assert len(blocks) == 3
+
+    def test_strip_all_blocks_fallback_preserves_original(self) -> None:
+        from thetokencompany._compress import compress_anthropic_messages
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "server_tool_use", "id": "srvtoolu_123", "name": "web_search", "input": {"query": "test"}},
+                    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_123", "content": []},
+                ],
+            },
+        ]
+        ttc = MagicMock()
+        result = compress_anthropic_messages(
+            ttc, messages, "bear-2", {"user": 0.2},
+            strip_server_tool_results=True,
+        )
+
+        blocks = result[0]["content"]
+        assert len(blocks) == 2
+
+    def test_user_messages_unaffected_by_strip(self) -> None:
+        from thetokencompany._compress import compress_anthropic_messages
+
+        with patch("thetokencompany._compress.compress_text") as mock_ct:
+            mock_ct.side_effect = lambda _t, text, _m, _a: f"[c]{text}"
+            messages = [
+                {"role": "user", "content": "hello"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "server_tool_use", "id": "s1", "name": "web_search", "input": {}},
+                        {"type": "web_search_tool_result", "tool_use_id": "s1", "content": []},
+                        {"type": "text", "text": "answer"},
+                    ],
+                },
+                {"role": "user", "content": "follow up"},
+            ]
+            ttc = MagicMock()
+            result = compress_anthropic_messages(
+                ttc, messages, "bear-2", {"user": 0.2, "tool": 0.2},
+                strip_server_tool_results=True,
+            )
+
+        assert result[0]["content"] == "[c]hello"
+        assert len(result[1]["content"]) == 1
+        assert result[1]["content"][0]["type"] == "text"
+        assert result[2]["content"] == "[c]follow up"
+
+
+class TestAnthropicAssistantCompression:
+    def test_compress_assistant_text_blocks(self) -> None:
+        from thetokencompany._compress import compress_anthropic_messages
+
+        with patch("thetokencompany._compress.compress_text") as mock_ct:
+            mock_ct.side_effect = lambda _t, text, _m, _a: f"[c]{text}"
+            messages = [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "A long assistant response with lots of content."},
+                    ],
+                },
+            ]
+            ttc = MagicMock()
+            result = compress_anthropic_messages(
+                ttc, messages, "bear-2", {"user": 0.2, "assistant": 0.3},
+            )
+
+        assert result[0]["content"][0]["text"] == "[c]A long assistant response with lots of content."
+
+    def test_assistant_string_content_compressed(self) -> None:
+        from thetokencompany._compress import compress_anthropic_messages
+
+        with patch("thetokencompany._compress.compress_text") as mock_ct:
+            mock_ct.side_effect = lambda _t, text, _m, _a: f"[c]{text}"
+            messages = [
+                {"role": "assistant", "content": "Plain text assistant response."},
+            ]
+            ttc = MagicMock()
+            result = compress_anthropic_messages(
+                ttc, messages, "bear-2", {"assistant": 0.2},
+            )
+
+        assert result[0]["content"] == "[c]Plain text assistant response."
+
+    def test_no_assistant_aggr_skips_compression(self) -> None:
+        from thetokencompany._compress import compress_anthropic_messages
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "should not change"}],
+            },
+        ]
+        ttc = MagicMock()
+        result = compress_anthropic_messages(
+            ttc, messages, "bear-2", {"user": 0.2},
+        )
+
+        assert result[0]["content"][0]["text"] == "should not change"
+
+
+class TestAnthropicWrapperOptions:
+    def test_compress_assistant_sets_aggressiveness(self) -> None:
+        from thetokencompany.anthropic import with_compression
+
+        mock_client = MagicMock()
+        original_create = MagicMock(return_value="response")
+        mock_client.messages.create = original_create
+
+        with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
+            mock_ttc = MockTTC.return_value
+            mock_ttc.compress.return_value = _mock_compress_response("x")
+
+            wrapped = with_compression(
+                mock_client,
+                compression_api_key="ttc-test",
+                compress_assistant=True,
+            )
+            wrapped.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                messages=[
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "long assistant text to compress"},
+                    {"role": "user", "content": "follow up"},
+                ],
+            )
+
+        call_kwargs = original_create.call_args[1]
+        assert "[compressed]" in call_kwargs["messages"][1]["content"]
+
+    def test_strip_server_tool_results_in_wrapper(self) -> None:
+        from thetokencompany.anthropic import with_compression
+
+        mock_client = MagicMock()
+        original_create = MagicMock(return_value="response")
+        mock_client.messages.create = original_create
+
+        with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
+            mock_ttc = MockTTC.return_value
+            mock_ttc.compress.return_value = _mock_compress_response("x")
+
+            wrapped = with_compression(
+                mock_client,
+                compression_api_key="ttc-test",
+                strip_server_tool_results=True,
+            )
+            wrapped.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                messages=[
+                    {"role": "user", "content": "question"},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "server_tool_use", "id": "s1", "name": "web_search", "input": {}},
+                            {"type": "web_search_tool_result", "tool_use_id": "s1", "content": [
+                                {"type": "web_search_result", "encrypted_content": "long_encrypted_data_" * 100}
+                            ]},
+                            {"type": "text", "text": "Here is the answer."},
+                        ],
+                    },
+                    {"role": "user", "content": "follow up"},
+                ],
+            )
+
+        call_kwargs = original_create.call_args[1]
+        assistant_blocks = call_kwargs["messages"][1]["content"]
+        types = [b["type"] for b in assistant_blocks]
+        assert "server_tool_use" not in types
+        assert "web_search_tool_result" not in types
+        assert "text" in types
+
+
 class TestHelpers:
     def test_empty_content_passthrough(self) -> None:
         from thetokencompany._compress import compress_text

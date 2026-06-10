@@ -33,6 +33,8 @@ def with_compression(
     compression_api_key: str,
     model: str = BEAR_2,
     aggressiveness: Aggressiveness = DEFAULT_AGGRESSIVENESS,
+    compress_assistant: bool = False,
+    strip_server_tool_results: bool = False,
     app_id: str | None = None,
     http_client: httpx.Client | None = None,
     async_http_client: httpx.AsyncClient | None = None,
@@ -47,9 +49,20 @@ def with_compression(
         client.messages.create(...)
         print(client.compression.total_tokens_saved)
 
-    Assistant messages are never compressed to preserve the provider's KV cache.
+    Args:
+        compress_assistant: When ``True``, also compress text blocks in
+            assistant messages. Useful for multi-turn conversations where
+            previous assistant responses (e.g. from web search) are large.
+            Defaults to ``False`` to preserve the provider's KV cache.
+        strip_server_tool_results: When ``True``, remove server-side tool
+            result blocks (e.g. ``web_search_tool_result``) from assistant
+            messages before sending. This can significantly reduce input
+            tokens in multi-turn conversations that use server-side tools.
+            Note: this disables citations in subsequent turns.
     """
     role_aggr = _resolve_aggressiveness(aggressiveness)
+    if compress_assistant and "assistant" not in role_aggr:
+        role_aggr["assistant"] = role_aggr.get("user", DEFAULT_AGGRESSIVENESS)
     system_aggr = role_aggr.get("system")
     stats = CompressionStats()
     original_create = client.messages.create
@@ -67,7 +80,8 @@ def with_compression(
             stats._start_turn()
             if "messages" in kwargs:
                 kwargs["messages"] = await compress_anthropic_messages_async(
-                    compressor, kwargs["messages"], model, role_aggr
+                    compressor, kwargs["messages"], model, role_aggr,
+                    strip_server_tool_results=strip_server_tool_results,
                 )
             if system_aggr is not None and "system" in kwargs:
                 system = kwargs["system"]
@@ -94,7 +108,8 @@ def with_compression(
             stats._start_turn()
             if "messages" in kwargs:
                 kwargs["messages"] = compress_anthropic_messages(
-                    compressor, kwargs["messages"], model, role_aggr
+                    compressor, kwargs["messages"], model, role_aggr,
+                    strip_server_tool_results=strip_server_tool_results,
                 )
             if system_aggr is not None and "system" in kwargs:
                 system = kwargs["system"]
