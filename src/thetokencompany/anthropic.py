@@ -54,7 +54,7 @@ def _inject_search_tool(kwargs: dict[str, Any]) -> None:
     """Remove Anthropic's server-side web search and inject our tool."""
     tools = list(kwargs.get("tools", []))
     # Remove Anthropic's server-side web search if present
-    tools = [t for t in tools if t.get("type") != "web_search_20250305"]
+    tools = [t for t in tools if not str(t.get("type", "")).startswith("web_search_")]
     # Add our tool if not already there
     if not any(t.get("name") == "ttc_web_search" for t in tools):
         tools.append(_TTC_SEARCH_TOOL)
@@ -244,7 +244,7 @@ def with_compression(
             tokens in multi-turn conversations that use server-side tools.
             Note: this disables citations in subsequent turns.
         web_search: When ``True``, intercept Anthropic's server-side
-            ``web_search_20250305`` tool and replace it with a client-side
+            ``web_search_*`` server-side tools and replace them with a client-side
             tool backed by TTC's ``/v1/search`` endpoint.  Search results
             are automatically compressed before being fed back to the model.
     """

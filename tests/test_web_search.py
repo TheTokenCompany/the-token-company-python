@@ -147,6 +147,17 @@ class TestInjectSearchTool:
         types = [t.get("type") for t in kwargs["tools"]]
         assert "web_search_20250305" not in types
 
+    def test_removes_any_web_search_version(self) -> None:
+        kwargs: dict[str, Any] = {
+            "tools": [
+                {"type": "web_search_20260209", "name": "web_search"},
+            ],
+        }
+        _inject_search_tool(kwargs)
+        types = [t.get("type") for t in kwargs["tools"]]
+        assert not any(str(t).startswith("web_search_") for t in types)
+        assert kwargs["tools"][0]["name"] == "ttc_web_search"
+
     def test_preserves_existing_tools(self) -> None:
         kwargs: dict[str, Any] = {
             "tools": [{"name": "calculator", "input_schema": {}}],
