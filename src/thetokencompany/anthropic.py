@@ -65,10 +65,7 @@ def _has_ttc_search_use(response: Any) -> bool:
     """Return True if the response contains a ttc_web_search tool_use."""
     if response.stop_reason != "tool_use":
         return False
-    return any(
-        b.type == "tool_use" and b.name == "ttc_web_search"
-        for b in response.content
-    )
+    return any(b.type == "tool_use" and b.name == "ttc_web_search" for b in response.content)
 
 
 def _format_search_results(search_response: SearchResponse) -> str:
@@ -109,11 +106,13 @@ def _handle_search_loop_sync(
                 query = block.input.get("query", "")
                 search_result = ttc_client.search(query)
                 result_text = _format_search_results(search_result)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": result_text,
-                })
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_text,
+                    }
+                )
 
         if tool_results:
             messages.append({"role": "user", "content": tool_results})
@@ -123,19 +122,18 @@ def _handle_search_loop_sync(
 
         stats._start_turn()
         new_kwargs["messages"] = compress_anthropic_messages(
-            compressor, new_kwargs["messages"], model, role_aggr,
+            compressor,
+            new_kwargs["messages"],
+            model,
+            role_aggr,
             strip_server_tool_results=strip_server_tool_results,
         )
         if system_aggr is not None and "system" in new_kwargs:
             system = new_kwargs["system"]
             if isinstance(system, str):
-                new_kwargs["system"] = compress_text(
-                    compressor, system, model, system_aggr
-                )
+                new_kwargs["system"] = compress_text(compressor, system, model, system_aggr)
             elif isinstance(system, list):
-                new_kwargs["system"] = _compress_text_blocks(
-                    compressor, system, model, system_aggr
-                )
+                new_kwargs["system"] = _compress_text_blocks(compressor, system, model, system_aggr)
         stats._end_turn()
 
         response = original_create(**new_kwargs)
@@ -170,11 +168,13 @@ async def _handle_search_loop_async(
                 query = block.input.get("query", "")
                 search_result = await ttc_client.search(query)
                 result_text = _format_search_results(search_result)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": result_text,
-                })
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_text,
+                    }
+                )
 
         if tool_results:
             messages.append({"role": "user", "content": tool_results})
@@ -184,7 +184,10 @@ async def _handle_search_loop_async(
 
         stats._start_turn()
         new_kwargs["messages"] = await compress_anthropic_messages_async(
-            compressor, new_kwargs["messages"], model, role_aggr,
+            compressor,
+            new_kwargs["messages"],
+            model,
+            role_aggr,
             strip_server_tool_results=strip_server_tool_results,
         )
         if system_aggr is not None and "system" in new_kwargs:
@@ -271,7 +274,10 @@ def with_compression(
                 _inject_search_tool(kwargs)
             if "messages" in kwargs:
                 kwargs["messages"] = await compress_anthropic_messages_async(
-                    compressor, kwargs["messages"], model, role_aggr,
+                    compressor,
+                    kwargs["messages"],
+                    model,
+                    role_aggr,
                     strip_server_tool_results=strip_server_tool_results,
                 )
             if system_aggr is not None and "system" in kwargs:
@@ -289,8 +295,15 @@ def with_compression(
 
             if web_search:
                 response = await _handle_search_loop_async(
-                    response, kwargs, original_create, async_ttc,
-                    model, stats, compressor, role_aggr, system_aggr,
+                    response,
+                    kwargs,
+                    original_create,
+                    async_ttc,
+                    model,
+                    stats,
+                    compressor,
+                    role_aggr,
+                    system_aggr,
                     strip_server_tool_results,
                 )
 
@@ -299,7 +312,9 @@ def with_compression(
         client.messages.create = async_create
     else:
         sync_ttc = TheTokenCompany(
-            api_key=compression_api_key, base_url=base_url, app_id=app_id,
+            api_key=compression_api_key,
+            base_url=base_url,
+            app_id=app_id,
             http_client=http_client,
         )
         compressor = _StatsTTC(sync_ttc, stats)
@@ -311,26 +326,32 @@ def with_compression(
                 _inject_search_tool(kwargs)
             if "messages" in kwargs:
                 kwargs["messages"] = compress_anthropic_messages(
-                    compressor, kwargs["messages"], model, role_aggr,
+                    compressor,
+                    kwargs["messages"],
+                    model,
+                    role_aggr,
                     strip_server_tool_results=strip_server_tool_results,
                 )
             if system_aggr is not None and "system" in kwargs:
                 system = kwargs["system"]
                 if isinstance(system, str):
-                    kwargs["system"] = compress_text(
-                        compressor, system, model, system_aggr
-                    )
+                    kwargs["system"] = compress_text(compressor, system, model, system_aggr)
                 elif isinstance(system, list):
-                    kwargs["system"] = _compress_text_blocks(
-                        compressor, system, model, system_aggr
-                    )
+                    kwargs["system"] = _compress_text_blocks(compressor, system, model, system_aggr)
             stats._end_turn()
             response = original_create(*args, **kwargs)
 
             if web_search:
                 response = _handle_search_loop_sync(
-                    response, kwargs, original_create, sync_ttc,
-                    model, stats, compressor, role_aggr, system_aggr,
+                    response,
+                    kwargs,
+                    original_create,
+                    sync_ttc,
+                    model,
+                    stats,
+                    compressor,
+                    role_aggr,
+                    system_aggr,
                     strip_server_tool_results,
                 )
 

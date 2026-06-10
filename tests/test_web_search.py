@@ -18,7 +18,9 @@ from thetokencompany.anthropic import (
 
 def _mock_compress_response(text: str) -> CompressResponse:
     return CompressResponse(
-        output=f"[compressed]{text}", output_tokens=5, input_tokens=20,
+        output=f"[compressed]{text}",
+        output_tokens=5,
+        input_tokens=20,
     )
 
 
@@ -175,9 +177,7 @@ class TestInjectSearchTool:
             ],
         }
         _inject_search_tool(kwargs)
-        ttc_tools = [
-            t for t in kwargs["tools"] if t.get("name") == "ttc_web_search"
-        ]
+        ttc_tools = [t for t in kwargs["tools"] if t.get("name") == "ttc_web_search"]
         assert len(ttc_tools) == 1
 
 
@@ -223,10 +223,14 @@ class TestFormatSearchResults:
         sr = _make_search_response(
             results=[
                 SearchResult(
-                    url="https://a.com", title="A", content="Content A",
+                    url="https://a.com",
+                    title="A",
+                    content="Content A",
                 ),
                 SearchResult(
-                    url="https://b.com", title="B", content="Content B",
+                    url="https://b.com",
+                    title="B",
+                    content="Content B",
                 ),
             ],
         )

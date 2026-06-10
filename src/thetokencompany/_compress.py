@@ -53,9 +53,7 @@ def _resolve_aggressiveness(aggressiveness: Aggressiveness) -> dict[str, float]:
 # ---------------------------------------------------------------------------
 
 
-def compress_text(
-    ttc: TheTokenCompany, text: str, model: str, aggressiveness: float
-) -> str:
+def compress_text(ttc: TheTokenCompany, text: str, model: str, aggressiveness: float) -> str:
     if not text or not text.strip():
         return text
     return ttc.compress(text, model=model, aggressiveness=aggressiveness).output
@@ -183,7 +181,10 @@ def compress_anthropic_messages(
 ) -> list[dict[str, Any]]:
     return [
         _compress_anthropic_msg(
-            ttc, m, model, role_aggr,
+            ttc,
+            m,
+            model,
+            role_aggr,
             strip_server_tool_results=strip_server_tool_results,
             max_search_results=max_search_results,
         )
@@ -202,7 +203,10 @@ async def compress_anthropic_messages_async(
 ) -> list[dict[str, Any]]:
     tasks = [
         _compress_anthropic_msg_async(
-            ttc, m, model, role_aggr,
+            ttc,
+            m,
+            model,
+            role_aggr,
             strip_server_tool_results=strip_server_tool_results,
             max_search_results=max_search_results,
         )
@@ -238,7 +242,10 @@ def _compress_anthropic_msg(
             return message
         if isinstance(content, list):
             blocks = _compress_assistant_blocks(
-                ttc, content, model, assistant_aggr,
+                ttc,
+                content,
+                model,
+                assistant_aggr,
                 strip_server_tool_results,
             )
             return {**message, "content": blocks}
@@ -288,11 +295,17 @@ async def _compress_anthropic_msg_async(
             return message
         if isinstance(content, str):
             if assistant_aggr is not None:
-                return {**message, "content": await compress_text_async(ttc, content, model, assistant_aggr)}
+                return {
+                    **message,
+                    "content": await compress_text_async(ttc, content, model, assistant_aggr),
+                }
             return message
         if isinstance(content, list):
             blocks = await _compress_assistant_blocks_async(
-                ttc, content, model, assistant_aggr,
+                ttc,
+                content,
+                model,
+                assistant_aggr,
                 strip_server_tool_results,
             )
             return {**message, "content": blocks}

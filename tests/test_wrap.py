@@ -237,9 +237,7 @@ class TestAnthropicMessages:
                 }
             ]
             ttc = MagicMock()
-            compress_anthropic_messages(
-                ttc, messages, "bear-2", {"user": 0.1, "tool": 0.8}
-            )
+            compress_anthropic_messages(ttc, messages, "bear-2", {"user": 0.1, "tool": 0.8})
 
         assert captured == [("here are results", 0.1), ("tool data", 0.8)]
 
@@ -372,17 +370,34 @@ class TestAnthropicServerToolStripping:
             {
                 "role": "assistant",
                 "content": [
-                    {"type": "server_tool_use", "id": "srvtoolu_123", "name": "web_search", "input": {"query": "test"}},
-                    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_123", "content": [
-                        {"type": "web_search_result", "url": "https://example.com", "title": "Example", "encrypted_content": "abc123"}
-                    ]},
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_123",
+                        "name": "web_search",
+                        "input": {"query": "test"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_123",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://example.com",
+                                "title": "Example",
+                                "encrypted_content": "abc123",
+                            }
+                        ],
+                    },
                     {"type": "text", "text": "Here are the results."},
                 ],
             },
         ]
         ttc = MagicMock()
         result = compress_anthropic_messages(
-            ttc, messages, "bear-2", {"user": 0.2, "tool": 0.2},
+            ttc,
+            messages,
+            "bear-2",
+            {"user": 0.2, "tool": 0.2},
             strip_server_tool_results=True,
         )
 
@@ -398,15 +413,27 @@ class TestAnthropicServerToolStripping:
             {
                 "role": "assistant",
                 "content": [
-                    {"type": "server_tool_use", "id": "srvtoolu_123", "name": "web_search", "input": {"query": "test"}},
-                    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_123", "content": []},
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_123",
+                        "name": "web_search",
+                        "input": {"query": "test"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_123",
+                        "content": [],
+                    },
                     {"type": "text", "text": "Results."},
                 ],
             },
         ]
         ttc = MagicMock()
         result = compress_anthropic_messages(
-            ttc, messages, "bear-2", {"user": 0.2},
+            ttc,
+            messages,
+            "bear-2",
+            {"user": 0.2},
             strip_server_tool_results=False,
         )
 
@@ -420,14 +447,26 @@ class TestAnthropicServerToolStripping:
             {
                 "role": "assistant",
                 "content": [
-                    {"type": "server_tool_use", "id": "srvtoolu_123", "name": "web_search", "input": {"query": "test"}},
-                    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_123", "content": []},
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_123",
+                        "name": "web_search",
+                        "input": {"query": "test"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_123",
+                        "content": [],
+                    },
                 ],
             },
         ]
         ttc = MagicMock()
         result = compress_anthropic_messages(
-            ttc, messages, "bear-2", {"user": 0.2},
+            ttc,
+            messages,
+            "bear-2",
+            {"user": 0.2},
             strip_server_tool_results=True,
         )
 
@@ -453,7 +492,10 @@ class TestAnthropicServerToolStripping:
             ]
             ttc = MagicMock()
             result = compress_anthropic_messages(
-                ttc, messages, "bear-2", {"user": 0.2, "tool": 0.2},
+                ttc,
+                messages,
+                "bear-2",
+                {"user": 0.2, "tool": 0.2},
                 strip_server_tool_results=True,
             )
 
@@ -479,10 +521,15 @@ class TestAnthropicAssistantCompression:
             ]
             ttc = MagicMock()
             result = compress_anthropic_messages(
-                ttc, messages, "bear-2", {"user": 0.2, "assistant": 0.3},
+                ttc,
+                messages,
+                "bear-2",
+                {"user": 0.2, "assistant": 0.3},
             )
 
-        assert result[0]["content"][0]["text"] == "[c]A long assistant response with lots of content."
+        assert (
+            result[0]["content"][0]["text"] == "[c]A long assistant response with lots of content."
+        )
 
     def test_assistant_string_content_compressed(self) -> None:
         from thetokencompany._compress import compress_anthropic_messages
@@ -494,7 +541,10 @@ class TestAnthropicAssistantCompression:
             ]
             ttc = MagicMock()
             result = compress_anthropic_messages(
-                ttc, messages, "bear-2", {"assistant": 0.2},
+                ttc,
+                messages,
+                "bear-2",
+                {"assistant": 0.2},
             )
 
         assert result[0]["content"] == "[c]Plain text assistant response."
@@ -510,7 +560,10 @@ class TestAnthropicAssistantCompression:
         ]
         ttc = MagicMock()
         result = compress_anthropic_messages(
-            ttc, messages, "bear-2", {"user": 0.2},
+            ttc,
+            messages,
+            "bear-2",
+            {"user": 0.2},
         )
 
         assert result[0]["content"][0]["text"] == "should not change"
@@ -570,10 +623,22 @@ class TestAnthropicWrapperOptions:
                     {
                         "role": "assistant",
                         "content": [
-                            {"type": "server_tool_use", "id": "s1", "name": "web_search", "input": {}},
-                            {"type": "web_search_tool_result", "tool_use_id": "s1", "content": [
-                                {"type": "web_search_result", "encrypted_content": "long_encrypted_data_" * 100}
-                            ]},
+                            {
+                                "type": "server_tool_use",
+                                "id": "s1",
+                                "name": "web_search",
+                                "input": {},
+                            },
+                            {
+                                "type": "web_search_tool_result",
+                                "tool_use_id": "s1",
+                                "content": [
+                                    {
+                                        "type": "web_search_result",
+                                        "encrypted_content": "long_encrypted_data_" * 100,
+                                    }
+                                ],
+                            },
                             {"type": "text", "text": "Here is the answer."},
                         ],
                     },

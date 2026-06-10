@@ -71,7 +71,9 @@ def with_compression(
         client.chat.completions.create = async_create
     else:
         sync_ttc = TheTokenCompany(
-            api_key=compression_api_key, app_id=app_id, http_client=http_client,
+            api_key=compression_api_key,
+            app_id=app_id,
+            http_client=http_client,
         )
         compressor = _StatsTTC(sync_ttc, stats)
 

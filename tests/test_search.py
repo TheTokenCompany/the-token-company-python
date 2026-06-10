@@ -108,9 +108,7 @@ class TestSearch:
                 json=_make_search_response(results=[], query="test"),
             )
         )
-        client = TheTokenCompany(
-            api_key="ttc-test", base_url=staging_url, gzip=False
-        )
+        client = TheTokenCompany(api_key="ttc-test", base_url=staging_url, gzip=False)
         result = client.search("test")
         assert result.query == "test"
         assert isinstance(result, SearchResponse)
@@ -136,9 +134,7 @@ class TestSearch:
         route = respx.post(f"{BASE_URL}/v1/search").mock(
             return_value=httpx.Response(200, json=_make_search_response())
         )
-        client = TheTokenCompany(
-            api_key="ttc-test", base_url=BASE_URL, app_id="default-app"
-        )
+        client = TheTokenCompany(api_key="ttc-test", base_url=BASE_URL, app_id="default-app")
         client.search("test query", app_id="override-app")
         body = json.loads(gzip.decompress(route.calls[0].request.content))
         assert body["app_id"] == "override-app"

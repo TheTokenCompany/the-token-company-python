@@ -32,7 +32,6 @@ class CompressResponse:
         return self.input_tokens / self.output_tokens
 
 
-
 @dataclass(frozen=True, slots=True)
 class SearchResult:
     """A single compressed web search result."""
