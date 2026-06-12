@@ -127,6 +127,7 @@ def _handle_search_loop_sync(
             model,
             role_aggr,
             strip_server_tool_results=strip_server_tool_results,
+            skip_tool_name="ttc_web_search",
         )
         if system_aggr is not None and "system" in new_kwargs:
             system = new_kwargs["system"]
@@ -189,6 +190,7 @@ async def _handle_search_loop_async(
             model,
             role_aggr,
             strip_server_tool_results=strip_server_tool_results,
+            skip_tool_name="ttc_web_search",
         )
         if system_aggr is not None and "system" in new_kwargs:
             system = new_kwargs["system"]
@@ -279,6 +281,7 @@ def with_compression(
                     model,
                     role_aggr,
                     strip_server_tool_results=strip_server_tool_results,
+                    skip_tool_name="ttc_web_search" if web_search else None,
                 )
             if system_aggr is not None and "system" in kwargs:
                 system = kwargs["system"]
@@ -331,6 +334,7 @@ def with_compression(
                     model,
                     role_aggr,
                     strip_server_tool_results=strip_server_tool_results,
+                    skip_tool_name="ttc_web_search" if web_search else None,
                 )
             if system_aggr is not None and "system" in kwargs:
                 system = kwargs["system"]

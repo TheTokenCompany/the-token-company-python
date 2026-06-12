@@ -170,6 +170,26 @@ async def _compress_openai_msg_async(
 # ---------------------------------------------------------------------------
 
 
+def _collect_tool_use_ids(messages: list[dict[str, Any]], tool_name: str) -> set[str]:
+    ids: set[str] = set()
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("name") == tool_name
+            ):
+                bid = block.get("id")
+                if bid:
+                    ids.add(bid)
+    return ids
+
+
 def compress_anthropic_messages(
     ttc: TheTokenCompany,
     messages: list[dict[str, Any]],
@@ -178,7 +198,9 @@ def compress_anthropic_messages(
     *,
     strip_server_tool_results: bool = False,
     max_search_results: int | None = None,
+    skip_tool_name: str | None = None,
 ) -> list[dict[str, Any]]:
+    skip_ids = _collect_tool_use_ids(messages, skip_tool_name) if skip_tool_name else None
     return [
         _compress_anthropic_msg(
             ttc,
@@ -187,6 +209,7 @@ def compress_anthropic_messages(
             role_aggr,
             strip_server_tool_results=strip_server_tool_results,
             max_search_results=max_search_results,
+            skip_ids=skip_ids,
         )
         for m in messages
     ]
@@ -200,7 +223,9 @@ async def compress_anthropic_messages_async(
     *,
     strip_server_tool_results: bool = False,
     max_search_results: int | None = None,
+    skip_tool_name: str | None = None,
 ) -> list[dict[str, Any]]:
+    skip_ids = _collect_tool_use_ids(messages, skip_tool_name) if skip_tool_name else None
     tasks = [
         _compress_anthropic_msg_async(
             ttc,
@@ -209,6 +234,7 @@ async def compress_anthropic_messages_async(
             role_aggr,
             strip_server_tool_results=strip_server_tool_results,
             max_search_results=max_search_results,
+            skip_ids=skip_ids,
         )
         for m in messages
     ]
@@ -223,6 +249,7 @@ def _compress_anthropic_msg(
     *,
     strip_server_tool_results: bool = False,
     max_search_results: int | None = None,
+    skip_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     role = message.get("role", "")
 
@@ -267,7 +294,7 @@ def _compress_anthropic_msg(
             return {**message, "content": compress_text(ttc, content, model, user_aggr)}
         return message
     if isinstance(content, list):
-        blocks = _compress_anthropic_blocks(ttc, content, model, user_aggr, tool_aggr)
+        blocks = _compress_anthropic_blocks(ttc, content, model, user_aggr, tool_aggr, skip_ids)
         return {**message, "content": blocks}
     return message
 
@@ -280,6 +307,7 @@ async def _compress_anthropic_msg_async(
     *,
     strip_server_tool_results: bool = False,
     max_search_results: int | None = None,
+    skip_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     role = message.get("role", "")
 
@@ -327,7 +355,9 @@ async def _compress_anthropic_msg_async(
             return {**message, "content": await compress_text_async(ttc, content, model, user_aggr)}
         return message
     if isinstance(content, list):
-        blocks = await _compress_anthropic_blocks_async(ttc, content, model, user_aggr, tool_aggr)
+        blocks = await _compress_anthropic_blocks_async(
+            ttc, content, model, user_aggr, tool_aggr, skip_ids
+        )
         return {**message, "content": blocks}
     return message
 
@@ -388,6 +418,7 @@ def _compress_anthropic_blocks(
     model: str,
     user_aggr: float | None,
     tool_aggr: float | None,
+    skip_ids: set[str] | None = None,
 ) -> list[Any]:
     result = []
     for block in blocks:
@@ -400,7 +431,11 @@ def _compress_anthropic_blocks(
             text = block.get("text", "")
             result.append({**block, "text": compress_text(ttc, text, model, user_aggr)})
         elif btype == "tool_result" and tool_aggr is not None:
-            result.append(_compress_tool_result(ttc, block, model, tool_aggr))
+            tool_use_id = block.get("tool_use_id")
+            if tool_use_id and skip_ids and tool_use_id in skip_ids:
+                result.append(block)
+            else:
+                result.append(_compress_tool_result(ttc, block, model, tool_aggr))
         else:
             result.append(block)
     return result
@@ -412,6 +447,7 @@ async def _compress_anthropic_blocks_async(
     model: str,
     user_aggr: float | None,
     tool_aggr: float | None,
+    skip_ids: set[str] | None = None,
 ) -> list[Any]:
     async def _do(block: Any) -> Any:
         if not isinstance(block, dict):
@@ -421,6 +457,9 @@ async def _compress_anthropic_blocks_async(
             text = block.get("text", "")
             return {**block, "text": await compress_text_async(ttc, text, model, user_aggr)}
         if btype == "tool_result" and tool_aggr is not None:
+            tool_use_id = block.get("tool_use_id")
+            if tool_use_id and skip_ids and tool_use_id in skip_ids:
+                return block
             return await _compress_tool_result_async(ttc, block, model, tool_aggr)
         return block
 
