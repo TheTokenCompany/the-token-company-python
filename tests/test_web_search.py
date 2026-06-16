@@ -459,6 +459,183 @@ class TestWebSearchSyncWrapper:
         mock_ttc.search.assert_not_called()
 
 
+    def test_multi_search_preserves_context(self) -> None:
+        """Multiple search iterations must accumulate context, not lose it.
+
+        Bug: the search loop reads from the original kwargs each iteration,
+        so previous assistant+tool_result pairs are dropped. This causes the
+        model to lose context and potentially re-search indefinitely.
+        """
+        from thetokencompany.anthropic import with_compression
+
+        mock_client = MagicMock()
+
+        # Simulate 3 calls: search1 → search2 → final text
+        original_create = MagicMock(
+            side_effect=[
+                _search_tool_use_response("query 1", "toolu_1"),
+                _search_tool_use_response("query 2", "toolu_2"),
+                _text_response("Final answer."),
+            ],
+        )
+        mock_client.messages.create = original_create
+
+        with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
+            mock_ttc = MockTTC.return_value
+            mock_ttc.compress.return_value = _mock_compress_response("x")
+            mock_ttc.search.return_value = _make_search_response()
+
+            wrapped = with_compression(
+                mock_client,
+                compression_api_key="ttc-test",
+                web_search=True,
+            )
+            wrapped.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                messages=[{"role": "user", "content": "Research AI"}],
+            )
+
+        assert original_create.call_count == 3
+
+        # The third call (after 2 searches) must contain ALL prior context:
+        # original user msg + assistant1 + tool_result1 + assistant2 + tool_result2
+        third_call_kwargs = original_create.call_args_list[2][1]
+        messages = third_call_kwargs["messages"]
+
+        # Count assistant and user messages with tool_results
+        assistant_msgs = [m for m in messages if m["role"] == "assistant"]
+        tool_result_msgs = [
+            m
+            for m in messages
+            if m["role"] == "user"
+            and isinstance(m.get("content"), list)
+            and any(
+                isinstance(b, dict) and b.get("type") == "tool_result"
+                for b in m["content"]
+            )
+        ]
+
+        assert len(assistant_msgs) == 2, (
+            f"Expected 2 assistant messages (both search responses), got {len(assistant_msgs)}. "
+            "Context from earlier search iterations is being lost."
+        )
+        assert len(tool_result_msgs) == 2, (
+            f"Expected 2 tool_result messages (both search results), got {len(tool_result_msgs)}. "
+            "Context from earlier search iterations is being lost."
+        )
+
+    def test_search_loop_does_not_recompress_already_compressed(self) -> None:
+        """Messages compressed in the initial call should not be re-compressed
+        in the search loop, since they're already compressed and the search
+        results from /v1/search are also pre-compressed.
+
+        With 1 user message and 1 search iteration, exactly 1 compress API
+        call should happen (for the initial user message). Any additional
+        calls are wasted latency from re-compressing already-compressed text.
+        """
+        from thetokencompany.anthropic import with_compression
+
+        mock_client = MagicMock()
+
+        original_create = MagicMock(
+            side_effect=[
+                _search_tool_use_response("latest news"),
+                _text_response("Done."),
+            ],
+        )
+        mock_client.messages.create = original_create
+
+        with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
+            mock_ttc = MockTTC.return_value
+            mock_ttc.compress.return_value = _mock_compress_response("x")
+            mock_ttc.search.return_value = _make_search_response()
+
+            wrapped = with_compression(
+                mock_client,
+                compression_api_key="ttc-test",
+                web_search=True,
+            )
+            wrapped.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                messages=[{"role": "user", "content": "What is the news?"}],
+            )
+
+        # With no system prompt and 1 user message, only 1 compress call
+        # should happen (the initial user message). The search loop should
+        # NOT re-compress: the user message was already compressed, and the
+        # search results arrive pre-compressed from /v1/search.
+        total_compress_calls = mock_ttc.compress.call_count
+        assert total_compress_calls == 1, (
+            f"Expected 1 compress API call (initial user message only), "
+            f"got {total_compress_calls}. The search loop is re-compressing "
+            "already-compressed messages, adding unnecessary latency."
+        )
+
+    def test_search_compression_stats_tracked(self) -> None:
+        """Compression stats should include token savings from web search.
+
+        The /v1/search endpoint compresses results server-side (1000 → 700
+        tokens = 300 saved). These savings must be visible in
+        client.compression.total_tokens_saved, separate from message
+        compression savings.
+        """
+        from thetokencompany.anthropic import with_compression
+
+        mock_client = MagicMock()
+
+        original_create = MagicMock(
+            side_effect=[
+                _search_tool_use_response("test query"),
+                _text_response("Answer."),
+            ],
+        )
+        mock_client.messages.create = original_create
+
+        with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
+            mock_ttc = MockTTC.return_value
+            # Make compress a no-op so we isolate search savings
+            mock_ttc.compress.return_value = CompressResponse(
+                output="same", output_tokens=10, input_tokens=10
+            )
+            # Search returns 1000 input tokens compressed to 700 = 300 saved
+            mock_ttc.search.return_value = SearchResponse(
+                results=[
+                    SearchResult(
+                        url="https://example.com",
+                        title="Big Article",
+                        content="Compressed article content...",
+                        score=0.95,
+                    ),
+                ],
+                query="test query",
+                original_input_tokens=1000,
+                output_tokens=700,
+            )
+
+            wrapped = with_compression(
+                mock_client,
+                compression_api_key="ttc-test",
+                web_search=True,
+            )
+            wrapped.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                messages=[{"role": "user", "content": "Search something"}],
+            )
+
+        # Message compression saved 0 tokens (no-op mock). The search
+        # endpoint saved 300 tokens. If total_tokens_saved is 0, the search
+        # savings are not being tracked.
+        assert wrapped.compression.total_tokens_saved >= 300, (
+            f"total_tokens_saved is {wrapped.compression.total_tokens_saved}, "
+            "expected at least 300 from search compression. The /v1/search "
+            "endpoint's compression savings are not being tracked in "
+            "CompressionStats."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Integration tests for async wrapper
 # ---------------------------------------------------------------------------

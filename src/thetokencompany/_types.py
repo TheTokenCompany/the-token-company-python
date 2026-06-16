@@ -106,6 +106,17 @@ class CompressionStats:
     def _record(self, response: CompressResponse) -> None:
         self._accumulator.append(response)
 
+    def _record_search(self, response: SearchResponse) -> None:
+        self.history.append(
+            TurnStats(
+                input_tokens=response.original_input_tokens,
+                output_tokens=response.output_tokens,
+                tokens_saved=response.tokens_saved,
+                messages_compressed=0,
+                timestamp=time.time(),
+            )
+        )
+
     def _end_turn(self) -> None:
         if self._accumulator:
             input_tokens = sum(r.input_tokens for r in self._accumulator)
