@@ -6,13 +6,11 @@ all API calls to show where time is spent and how context is (not) accumulated.
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 from thetokencompany._types import CompressResponse, SearchResponse, SearchResult
-
 
 # ---------------------------------------------------------------------------
 # Mock response objects (same as test_web_search.py)
@@ -156,7 +154,7 @@ def test_repro_research_query_latency():
             "structured analysis with sources."
         )
 
-        result = wrapped.messages.create(
+        wrapped.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=4096,
             system="You are a research analyst. Provide thorough analysis.",
@@ -194,7 +192,7 @@ def test_repro_research_query_latency():
         )
 
     # Check for re-compression of already-compressed content
-    print(f"\n--- Compress API call details ---")
+    print("\n--- Compress API call details ---")
     for i, c in enumerate(compress_call_log):
         print(f"  #{i + 1}: len={c['text_len']} | {c['text_preview']}...")
 
@@ -207,13 +205,13 @@ def test_repro_research_query_latency():
     llm_latency_ms = original_create.call_count * 5000
     total_est_ms = compress_latency_ms + search_latency_ms + llm_latency_ms
 
-    print(f"\n--- Estimated real-world latency ---")
+    print("\n--- Estimated real-world latency ---")
     print(f"  Compress calls: {len(compress_call_log)} × ~300ms = ~{compress_latency_ms}ms")
     print(f"  Search calls:   {len(search_call_log)} × ~3s    = ~{search_latency_ms}ms")
     print(f"  LLM calls:      {original_create.call_count} × ~5s    = ~{llm_latency_ms}ms")
     print(f"  TOTAL ESTIMATE: ~{total_est_ms / 1000:.0f}s ({total_est_ms / 60000:.1f} min)")
 
-    print(f"\n--- Compression stats ---")
+    print("\n--- Compression stats ---")
     print(f"  total_tokens_saved: {wrapped.compression.total_tokens_saved}")
     print(f"  turns recorded: {wrapped.compression.calls}")
 
