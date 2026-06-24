@@ -5,9 +5,9 @@ from typing import Any
 
 import httpx
 
-from thetokencompany._client import _build_payload, _parse_error
+from thetokencompany._client import _build_chat_payload, _build_payload, _parse_error
 from thetokencompany._constants import BASE_URL, DEFAULT_TIMEOUT
-from thetokencompany._types import CompressResponse, SearchResponse
+from thetokencompany._types import ChatCompressResponse, CompressResponse, SearchResponse
 
 
 class AsyncTheTokenCompany:
@@ -83,6 +83,41 @@ class AsyncTheTokenCompany:
         if not response.is_success:
             raise _parse_error(response)
         return CompressResponse.from_dict(response.json())
+
+    async def compress_chat(
+        self,
+        messages: list[Any],
+        *,
+        model: str = "bear-2",
+        fmt: str = "openai",
+        aggressiveness: float | dict[str, float] = 0.2,
+        system: Any | None = None,
+        strip_server_tool_results: bool = False,
+        skip_tool_use_ids: list[str] | None = None,
+        app_id: str | None = None,
+    ) -> ChatCompressResponse:
+        """Compress a whole chat conversation in a single request.
+
+        Async counterpart of :meth:`TheTokenCompany.compress_chat`. Sends the
+        entire message array to ``/v1/chat/compress`` so a long multi-turn
+        conversation costs one round-trip and the re-sent history is served
+        from cache server-side.
+        """
+        resolved_app_id = app_id if app_id is not None else self._app_id
+        payload = _build_chat_payload(
+            messages, model, fmt, aggressiveness,
+            system=system,
+            strip_server_tool_results=strip_server_tool_results,
+            skip_tool_use_ids=skip_tool_use_ids,
+            app_id=resolved_app_id,
+        )
+        response = await self._client.post(
+            f"{self._base_url}/v1/chat/compress",
+            content=self._encode(payload),
+        )
+        if not response.is_success:
+            raise _parse_error(response)
+        return ChatCompressResponse.from_dict(response.json())
 
     async def search(
         self,

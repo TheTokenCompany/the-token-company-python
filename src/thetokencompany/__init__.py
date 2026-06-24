@@ -13,6 +13,7 @@ from thetokencompany._exceptions import (
     TheTokenCompanyError,
 )
 from thetokencompany._types import (
+    ChatCompressResponse,
     CompressionStats,
     CompressResponse,
     SearchResponse,
@@ -21,11 +22,12 @@ from thetokencompany._types import (
     protect,
 )
 
-__version__ = "0.2.4"
+__version__ = "0.4.0"
 
 __all__ = [
     "AsyncTheTokenCompany",
     "TheTokenCompany",
+    "ChatCompressResponse",
     "CompressResponse",
     "CompressionStats",
     "SearchResponse",

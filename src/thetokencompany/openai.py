@@ -13,11 +13,7 @@ from thetokencompany._client import TheTokenCompany
 from thetokencompany._compress import (
     DEFAULT_AGGRESSIVENESS,
     Aggressiveness,
-    _AsyncStatsTTC,
     _resolve_aggressiveness,
-    _StatsTTC,
-    compress_openai_messages,
-    compress_openai_messages_async,
 )
 from thetokencompany._constants import BEAR_2
 from thetokencompany._types import CompressionStats
@@ -56,16 +52,18 @@ def with_compression(
             app_id=app_id,
             http_client=async_http_client,
         )
-        compressor: Any = _AsyncStatsTTC(async_ttc, stats)
 
         @functools.wraps(original_create)
         async def async_create(*args: Any, **kwargs: Any) -> Any:
             if "messages" in kwargs:
-                stats._start_turn()
-                kwargs["messages"] = await compress_openai_messages_async(
-                    compressor, kwargs["messages"], model, role_aggr
+                # One request for the whole conversation — the server walks the
+                # roles, compresses every segment concurrently, and serves the
+                # re-sent history from cache.
+                result = await async_ttc.compress_chat(
+                    kwargs["messages"], model=model, fmt="openai", aggressiveness=role_aggr
                 )
-                stats._end_turn()
+                kwargs["messages"] = result.messages
+                stats._record_chat(result)
             return await original_create(*args, **kwargs)
 
         client.chat.completions.create = async_create
@@ -75,16 +73,15 @@ def with_compression(
             app_id=app_id,
             http_client=http_client,
         )
-        compressor = _StatsTTC(sync_ttc, stats)
 
         @functools.wraps(original_create)
         def sync_create(*args: Any, **kwargs: Any) -> Any:
             if "messages" in kwargs:
-                stats._start_turn()
-                kwargs["messages"] = compress_openai_messages(
-                    compressor, kwargs["messages"], model, role_aggr
+                result = sync_ttc.compress_chat(
+                    kwargs["messages"], model=model, fmt="openai", aggressiveness=role_aggr
                 )
-                stats._end_turn()
+                kwargs["messages"] = result.messages
+                stats._record_chat(result)
             return original_create(*args, **kwargs)
 
         client.chat.completions.create = sync_create

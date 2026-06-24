@@ -7,11 +7,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from thetokencompany._compress import _resolve_aggressiveness
-from thetokencompany._types import CompressResponse
+from thetokencompany._types import ChatCompressResponse, CompressResponse
 
 
 def _mock_compress_response(text: str) -> CompressResponse:
     return CompressResponse(output=f"[compressed]{text}", output_tokens=5, input_tokens=20)
+
+
+def _chat_echo(messages: list, **kwargs: object) -> ChatCompressResponse:
+    """Mimic the server: echo the messages back (compression happens server-side
+    now, so the wrapper's job is just to forward what the endpoint returns)."""
+    return ChatCompressResponse(
+        messages=messages,
+        system=kwargs.get("system"),
+        input_tokens=20,
+        output_tokens=5,
+        cache_hits=0,
+        cache_misses=len(messages),
+        compression_time=0.0,
+    )
 
 
 class TestResolveAggressiveness:
@@ -281,7 +295,7 @@ class TestOpenAIWrapper:
 
         with patch("thetokencompany.openai.TheTokenCompany") as MockTTC:
             mock_ttc = MockTTC.return_value
-            mock_ttc.compress.return_value = _mock_compress_response("hello")
+            mock_ttc.compress_chat.side_effect = _chat_echo
 
             wrapped = with_compression(mock_client, compression_api_key="ttc-test")
             result = wrapped.chat.completions.create(
@@ -293,6 +307,9 @@ class TestOpenAIWrapper:
             )
 
         assert result == "response"
+        # The whole conversation goes in a single call, not one per message.
+        assert mock_ttc.compress_chat.call_count == 1
+        assert mock_ttc.compress_chat.call_args.kwargs["fmt"] == "openai"
 
     @pytest.mark.asyncio
     async def test_async(self) -> None:
@@ -303,7 +320,7 @@ class TestOpenAIWrapper:
 
         with patch("thetokencompany.openai.AsyncTheTokenCompany") as MockTTC:
             mock_ttc = MockTTC.return_value
-            mock_ttc.compress = AsyncMock(return_value=_mock_compress_response("hello"))
+            mock_ttc.compress_chat = AsyncMock(side_effect=_chat_echo)
 
             wrapped = with_compression(mock_client, compression_api_key="ttc-test")
             result = await wrapped.chat.completions.create(
@@ -312,6 +329,7 @@ class TestOpenAIWrapper:
             )
 
         assert result == "response"
+        mock_ttc.compress_chat.assert_awaited_once()
 
 
 class TestAnthropicWrapper:
@@ -319,11 +337,20 @@ class TestAnthropicWrapper:
         from thetokencompany.anthropic import with_compression
 
         mock_client = MagicMock()
-        mock_client.messages.create = MagicMock(return_value="response")
+        original_create = MagicMock(return_value="response")
+        mock_client.messages.create = original_create
 
         with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
             mock_ttc = MockTTC.return_value
-            mock_ttc.compress.return_value = _mock_compress_response("sys prompt")
+            mock_ttc.compress_chat.return_value = ChatCompressResponse(
+                messages=[{"role": "user", "content": "[c]hello"}],
+                system="[compressed]sys prompt",
+                input_tokens=40,
+                output_tokens=10,
+                cache_hits=0,
+                cache_misses=2,
+                compression_time=0.0,
+            )
 
             wrapped = with_compression(mock_client, compression_api_key="ttc-test")
             result = wrapped.messages.create(
@@ -334,7 +361,13 @@ class TestAnthropicWrapper:
             )
 
         assert result == "response"
-        assert mock_ttc.compress.call_count >= 2
+        # System + messages compressed together in ONE call.
+        mock_ttc.compress_chat.assert_called_once()
+        sent = mock_ttc.compress_chat.call_args.kwargs
+        assert sent["system"] == "You are a helpful assistant with lots of context..."
+        assert sent["fmt"] == "anthropic"
+        # The compressed system from the response is forwarded to the provider.
+        assert original_create.call_args[1]["system"] == "[compressed]sys prompt"
 
     def test_assistant_messages_preserved(self) -> None:
         from thetokencompany.anthropic import with_compression
@@ -345,7 +378,7 @@ class TestAnthropicWrapper:
 
         with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
             mock_ttc = MockTTC.return_value
-            mock_ttc.compress.return_value = _mock_compress_response("x")
+            mock_ttc.compress_chat.side_effect = _chat_echo
 
             wrapped = with_compression(mock_client, compression_api_key="ttc-test")
             wrapped.messages.create(
@@ -358,6 +391,9 @@ class TestAnthropicWrapper:
                 ],
             )
 
+        # Whole conversation forwarded in one call; assistant left intact
+        # (the server preserves it — by default it's absent from role_aggr).
+        assert mock_ttc.compress_chat.call_count == 1
         call_kwargs = original_create.call_args[1]
         assert call_kwargs["messages"][1]["content"] == "original response"
 
@@ -579,7 +615,7 @@ class TestAnthropicWrapperOptions:
 
         with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
             mock_ttc = MockTTC.return_value
-            mock_ttc.compress.return_value = _mock_compress_response("x")
+            mock_ttc.compress_chat.side_effect = _chat_echo
 
             wrapped = with_compression(
                 mock_client,
@@ -596,8 +632,10 @@ class TestAnthropicWrapperOptions:
                 ],
             )
 
-        call_kwargs = original_create.call_args[1]
-        assert "[compressed]" in call_kwargs["messages"][1]["content"]
+        # compress_assistant=True must add "assistant" to the per-role map sent
+        # to the server, so the server compresses assistant text too.
+        sent = mock_ttc.compress_chat.call_args.kwargs
+        assert "assistant" in sent["aggressiveness"]
 
     def test_strip_server_tool_results_in_wrapper(self) -> None:
         from thetokencompany.anthropic import with_compression
@@ -608,7 +646,7 @@ class TestAnthropicWrapperOptions:
 
         with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
             mock_ttc = MockTTC.return_value
-            mock_ttc.compress.return_value = _mock_compress_response("x")
+            mock_ttc.compress_chat.side_effect = _chat_echo
 
             wrapped = with_compression(
                 mock_client,
@@ -646,12 +684,10 @@ class TestAnthropicWrapperOptions:
                 ],
             )
 
-        call_kwargs = original_create.call_args[1]
-        assistant_blocks = call_kwargs["messages"][1]["content"]
-        types = [b["type"] for b in assistant_blocks]
-        assert "server_tool_use" not in types
-        assert "web_search_tool_result" not in types
-        assert "text" in types
+        # The strip flag must be forwarded to the server, which performs the
+        # actual block removal (see the API's chat_compress service tests).
+        sent = mock_ttc.compress_chat.call_args.kwargs
+        assert sent["strip_server_tool_results"] is True
 
 
 class TestHelpers:

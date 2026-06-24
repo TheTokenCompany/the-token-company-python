@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
+import logging
 from typing import Any
 
 import httpx
@@ -13,18 +15,13 @@ from thetokencompany._client import TheTokenCompany
 from thetokencompany._compress import (
     DEFAULT_AGGRESSIVENESS,
     Aggressiveness,
-    _AsyncStatsTTC,
-    _compress_text_blocks,
-    _compress_text_blocks_async,
+    _collect_tool_use_ids,
     _resolve_aggressiveness,
-    _StatsTTC,
-    compress_anthropic_messages,
-    compress_anthropic_messages_async,
-    compress_text,
-    compress_text_async,
 )
 from thetokencompany._constants import BASE_URL, BEAR_2
 from thetokencompany._types import CompressionStats, SearchResponse
+
+logger = logging.getLogger("thetokencompany")
 
 # ---------------------------------------------------------------------------
 # Web-search tool definition & helpers
@@ -50,15 +47,45 @@ _TTC_SEARCH_TOOL: dict[str, Any] = {
 }
 
 
-def _inject_search_tool(kwargs: dict[str, Any]) -> None:
-    """Remove Anthropic's server-side web search and inject our tool."""
+# Default cap on ttc_web_search calls per `messages.create`, mirroring
+# Anthropic's native `web_search` `max_uses`. Without a cap the agent can loop
+# indefinitely (each search is a sequential round-trip), which is the #1 source
+# of runaway latency. 10 suits a research/search agent (Anthropic's threshold
+# for "comparative or multi-entity research") while still hard-bounding latency.
+# Drop to ~3 for latency-sensitive lookups; raise to ~20 for deep research.
+# Override per call via `with_compression(web_search_max_uses=N)` or by setting
+# `max_uses` on the native web_search tool you pass.
+DEFAULT_WEB_SEARCH_MAX_USES = 10
+
+
+def _effective_max_uses(explicit: int | None, native: int | None) -> int:
+    """Resolve the search cap: explicit arg > native tool's max_uses > default."""
+    if explicit is not None:
+        return explicit
+    if native is not None:
+        return native
+    return DEFAULT_WEB_SEARCH_MAX_USES
+
+
+def _inject_search_tool(kwargs: dict[str, Any]) -> int | None:
+    """Remove Anthropic's server-side web search and inject ttc_web_search.
+
+    Returns the ``max_uses`` declared on any stripped native ``web_search_*``
+    tool (so a caller's existing cap carries over unchanged), or None.
+    """
     tools = list(kwargs.get("tools", []))
-    # Remove Anthropic's server-side web search if present
-    tools = [t for t in tools if not str(t.get("type", "")).startswith("web_search_")]
-    # Add our tool if not already there
-    if not any(t.get("name") == "ttc_web_search" for t in tools):
-        tools.append(_TTC_SEARCH_TOOL)
-    kwargs["tools"] = tools
+    native_max_uses: int | None = None
+    kept: list[Any] = []
+    for t in tools:
+        if str(t.get("type", "")).startswith("web_search_"):
+            if native_max_uses is None and isinstance(t.get("max_uses"), int):
+                native_max_uses = t["max_uses"]
+            continue  # strip the native tool
+        kept.append(t)
+    if not any(t.get("name") == "ttc_web_search" for t in kept):
+        kept.append(_TTC_SEARCH_TOOL)
+    kwargs["tools"] = kept
+    return native_max_uses
 
 
 def _has_ttc_search_use(response: Any) -> bool:
@@ -79,6 +106,77 @@ def _format_search_results(search_response: SearchResponse) -> str:
     return "\n".join(lines)
 
 
+def _search_ok(tool_use_id: str, search_response: SearchResponse) -> dict[str, Any]:
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": _format_search_results(search_response),
+    }
+
+
+def _search_failed(tool_use_id: str, err: Exception) -> dict[str, Any]:
+    """Error result for a failed search (native returns an error result too, so
+    the agent keeps going instead of crashing mid-run)."""
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "is_error": True,
+        "content": f"Web search failed: {type(err).__name__}: {err}",
+    }
+
+
+def _run_searches_threaded(ttc_client: TheTokenCompany, blocks: list[Any]) -> list[Any]:
+    """Run the round's searches CONCURRENTLY across threads (httpx.Client is
+    thread-safe). Returns a SearchResponse or an Exception per block, in order."""
+    def one(block: Any) -> Any:
+        try:
+            return ttc_client.search((block.input or {}).get("query", ""))
+        except Exception as e:  # noqa: BLE001 — surfaced as an error tool_result
+            return e
+
+    if not blocks:
+        return []
+    if len(blocks) == 1:
+        return [one(blocks[0])]
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(len(blocks), 8)) as pool:
+        return list(pool.map(one, blocks))
+
+
+def _budget_split(
+    search_blocks: list[Any], searches_done: int, max_uses: int | None
+) -> tuple[list[Any], dict[str, dict[str, Any]]]:
+    """Split a round's search blocks into the ones to actually run (within the
+    remaining budget, in order) and pre-built budget-exhausted results for the
+    rest."""
+    to_run: list[Any] = []
+    exhausted: dict[str, dict[str, Any]] = {}
+    for block in search_blocks:
+        if max_uses is not None and searches_done + len(to_run) >= max_uses:
+            exhausted[block.id] = _search_budget_exhausted(block.id)
+        else:
+            to_run.append(block)
+    return to_run, exhausted
+
+
+def _search_budget_exhausted(tool_use_id: str) -> dict[str, Any]:
+    """An error tool_result for a single over-budget search — like the
+    'max uses exceeded' / failed-search result a native web-search tool returns.
+    Scoped to THIS query (not a global change): the tool stays available, the
+    model just sees that this search didn't run and answers with what it has."""
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "is_error": True,
+        "content": (
+            "This search was not performed: the web-search limit for this "
+            "request has been reached. Do not retry; answer using the results "
+            "already gathered."
+        ),
+    }
+
+
 def _handle_search_loop_sync(
     response: Any,
     kwargs: dict[str, Any],
@@ -90,33 +188,41 @@ def _handle_search_loop_sync(
     role_aggr: dict[str, float],
     system_aggr: float | None,
     strip_server_tool_results: bool,
+    max_uses: int | None,
 ) -> Any:
-    """Handle the ttc_web_search tool-use loop synchronously."""
+    """Handle the ttc_web_search tool-use loop synchronously.
+
+    Caps the number of *actual* searches at ``max_uses`` (None = uncapped),
+    mirroring Anthropic's native web search: once the budget is spent, any
+    further search request gets an error tool_result (`is_error`, scoped to that
+    one query) instead of running — so the expensive `/v1/search` calls are
+    hard-bounded and the model answers with what it has. The tool stays
+    available; nothing global changes."""
     messages = list(kwargs.get("messages", []))
+    searches_done = 0
     while _has_ttc_search_use(response):
-        assistant_content = [b.model_dump() for b in response.content]
-        messages.append({"role": "assistant", "content": assistant_content})
+        messages.append({"role": "assistant",
+                         "content": [b.model_dump() for b in response.content]})
 
-        tool_results: list[dict[str, Any]] = []
-        for block in response.content:
-            if block.type == "tool_use" and block.name == "ttc_web_search":
-                query = block.input.get("query", "")
-                search_result = ttc_client.search(query)
-                stats._record_search(search_result)
-                result_text = _format_search_results(search_result)
-                tool_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result_text,
-                    }
-                )
+        search_blocks = [b for b in response.content
+                         if b.type == "tool_use" and b.name == "ttc_web_search"]
+        to_run, results_by_id = _budget_split(search_blocks, searches_done, max_uses)
 
+        # Run this round's searches concurrently (native does the same).
+        outcomes = _run_searches_threaded(ttc_client, to_run)
+        for block, outcome in zip(to_run, outcomes, strict=False):
+            if isinstance(outcome, Exception):
+                results_by_id[block.id] = _search_failed(block.id, outcome)
+            else:
+                stats._record_search(outcome)
+                results_by_id[block.id] = _search_ok(block.id, outcome)
+        searches_done += len(to_run)
+
+        tool_results = [results_by_id[b.id] for b in search_blocks]
         if tool_results:
             messages.append({"role": "user", "content": tool_results})
 
-        new_kwargs = {**kwargs, "messages": messages}
-        response = original_create(**new_kwargs)
+        response = original_create(**{**kwargs, "messages": messages})
 
     return response
 
@@ -132,33 +238,42 @@ async def _handle_search_loop_async(
     role_aggr: dict[str, float],
     system_aggr: float | None,
     strip_server_tool_results: bool,
+    max_uses: int | None,
 ) -> Any:
-    """Handle the ttc_web_search tool-use loop asynchronously."""
+    """Handle the ttc_web_search tool-use loop asynchronously.
+
+    Caps the number of actual searches at ``max_uses`` (None = uncapped); see
+    the sync variant for the per-query, native-style semantics."""
     messages = list(kwargs.get("messages", []))
+    searches_done = 0
     while _has_ttc_search_use(response):
-        assistant_content = [b.model_dump() for b in response.content]
-        messages.append({"role": "assistant", "content": assistant_content})
+        messages.append({"role": "assistant",
+                         "content": [b.model_dump() for b in response.content]})
 
-        tool_results: list[dict[str, Any]] = []
-        for block in response.content:
-            if block.type == "tool_use" and block.name == "ttc_web_search":
-                query = block.input.get("query", "")
-                search_result = await ttc_client.search(query)
-                stats._record_search(search_result)
-                result_text = _format_search_results(search_result)
-                tool_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result_text,
-                    }
-                )
+        search_blocks = [b for b in response.content
+                         if b.type == "tool_use" and b.name == "ttc_web_search"]
+        to_run, results_by_id = _budget_split(search_blocks, searches_done, max_uses)
 
+        # Run this round's searches concurrently (native does the same).
+        if to_run:
+            outcomes = await asyncio.gather(
+                *[ttc_client.search((b.input or {}).get("query", "")) for b in to_run],
+                return_exceptions=True,
+            )
+            for block, outcome in zip(to_run, outcomes, strict=False):
+                if isinstance(outcome, BaseException):
+                    err = outcome if isinstance(outcome, Exception) else Exception(str(outcome))
+                    results_by_id[block.id] = _search_failed(block.id, err)
+                else:
+                    stats._record_search(outcome)
+                    results_by_id[block.id] = _search_ok(block.id, outcome)
+            searches_done += len(to_run)
+
+        tool_results = [results_by_id[b.id] for b in search_blocks]
         if tool_results:
             messages.append({"role": "user", "content": tool_results})
 
-        new_kwargs = {**kwargs, "messages": messages}
-        response = await original_create(**new_kwargs)
+        response = await original_create(**{**kwargs, "messages": messages})
 
     return response
 
@@ -177,6 +292,7 @@ def with_compression(
     compress_assistant: bool = False,
     strip_server_tool_results: bool = False,
     web_search: bool = False,
+    web_search_max_uses: int | None = None,
     base_url: str = BASE_URL,
     app_id: str | None = None,
     http_client: httpx.Client | None = None,
@@ -206,6 +322,20 @@ def with_compression(
             ``web_search_*`` server-side tools and replace them with a client-side
             tool backed by TTC's ``/v1/search`` endpoint.  Search results
             are automatically compressed before being fed back to the model.
+        web_search_max_uses: Cap on the number of ``ttc_web_search`` calls per
+            ``messages.create``, mirroring Anthropic native web search's
+            ``max_uses``. When the budget is spent, a further search returns an
+            error result (``is_error``) scoped to that one query — exactly like
+            native's ``max_uses_exceeded`` — so the model answers with what it
+            has and the expensive ``/v1/search`` calls are bounded. The tool
+            stays available; nothing global changes.
+
+            Precedence: this argument, else ``max_uses`` on a native
+            ``web_search`` tool you pass (so existing configs carry over), else
+            ``DEFAULT_WEB_SEARCH_MAX_USES`` (10). Per Anthropic's guidance: simple
+            lookups use 1–3 searches, so ``3`` is good for latency-sensitive
+            apps; research agents should set ``15``–``20``. Pass ``0`` to disable
+            search entirely.
     """
     role_aggr = _resolve_aggressiveness(aggressiveness)
     if compress_assistant and "assistant" not in role_aggr:
@@ -221,33 +351,39 @@ def with_compression(
             app_id=app_id,
             http_client=async_http_client,
         )
-        compressor: Any = _AsyncStatsTTC(async_ttc, stats)
-
         @functools.wraps(original_create)
         async def async_create(*args: Any, **kwargs: Any) -> Any:
-            stats._start_turn()
+            native_max_uses: int | None = None
             if web_search:
-                _inject_search_tool(kwargs)
+                native_max_uses = _inject_search_tool(kwargs)
             if "messages" in kwargs:
-                kwargs["messages"] = await compress_anthropic_messages_async(
-                    compressor,
-                    kwargs["messages"],
-                    model,
-                    role_aggr,
-                    strip_server_tool_results=strip_server_tool_results,
-                    skip_tool_name="ttc_web_search" if web_search else None,
+                # One request for messages + system; the server walks the roles
+                # and tool_result blocks and serves re-sent history from cache.
+                skip_ids = (
+                    list(_collect_tool_use_ids(kwargs["messages"], "ttc_web_search"))
+                    if web_search else None
                 )
-            if system_aggr is not None and "system" in kwargs:
-                system = kwargs["system"]
-                if isinstance(system, str):
-                    kwargs["system"] = await compress_text_async(
-                        compressor, system, model, system_aggr
+                try:
+                    result = await async_ttc.compress_chat(
+                        kwargs["messages"],
+                        model=model,
+                        fmt="anthropic",
+                        aggressiveness=role_aggr,
+                        system=kwargs.get("system"),
+                        strip_server_tool_results=strip_server_tool_results,
+                        skip_tool_use_ids=skip_ids,
                     )
-                elif isinstance(system, list):
-                    kwargs["system"] = await _compress_text_blocks_async(
-                        compressor, system, model, system_aggr
+                    kwargs["messages"] = result.messages
+                    if "system" in kwargs:
+                        kwargs["system"] = result.system
+                    stats._record_chat(result)
+                except Exception as exc:  # pragma: no cover - network/backend faults
+                    # Graceful degradation: a compression-backend fault must never
+                    # break the customer's underlying LLM call. Fall through with
+                    # the original, uncompressed messages.
+                    logger.warning(
+                        "TTC compression failed (%s); sending uncompressed.", exc
                     )
-            stats._end_turn()
             response = await original_create(*args, **kwargs)
 
             if web_search:
@@ -258,10 +394,11 @@ def with_compression(
                     async_ttc,
                     model,
                     stats,
-                    compressor,
+                    None,
                     role_aggr,
                     system_aggr,
                     strip_server_tool_results,
+                    _effective_max_uses(web_search_max_uses, native_max_uses),
                 )
 
             return response
@@ -274,29 +411,37 @@ def with_compression(
             app_id=app_id,
             http_client=http_client,
         )
-        compressor = _StatsTTC(sync_ttc, stats)
-
         @functools.wraps(original_create)
         def sync_create(*args: Any, **kwargs: Any) -> Any:
-            stats._start_turn()
+            native_max_uses: int | None = None
             if web_search:
-                _inject_search_tool(kwargs)
+                native_max_uses = _inject_search_tool(kwargs)
             if "messages" in kwargs:
-                kwargs["messages"] = compress_anthropic_messages(
-                    compressor,
-                    kwargs["messages"],
-                    model,
-                    role_aggr,
-                    strip_server_tool_results=strip_server_tool_results,
-                    skip_tool_name="ttc_web_search" if web_search else None,
+                skip_ids = (
+                    list(_collect_tool_use_ids(kwargs["messages"], "ttc_web_search"))
+                    if web_search else None
                 )
-            if system_aggr is not None and "system" in kwargs:
-                system = kwargs["system"]
-                if isinstance(system, str):
-                    kwargs["system"] = compress_text(compressor, system, model, system_aggr)
-                elif isinstance(system, list):
-                    kwargs["system"] = _compress_text_blocks(compressor, system, model, system_aggr)
-            stats._end_turn()
+                try:
+                    result = sync_ttc.compress_chat(
+                        kwargs["messages"],
+                        model=model,
+                        fmt="anthropic",
+                        aggressiveness=role_aggr,
+                        system=kwargs.get("system"),
+                        strip_server_tool_results=strip_server_tool_results,
+                        skip_tool_use_ids=skip_ids,
+                    )
+                    kwargs["messages"] = result.messages
+                    if "system" in kwargs:
+                        kwargs["system"] = result.system
+                    stats._record_chat(result)
+                except Exception as exc:  # pragma: no cover - network/backend faults
+                    # Graceful degradation: a compression-backend fault must never
+                    # break the customer's underlying LLM call. Fall through with
+                    # the original, uncompressed messages.
+                    logger.warning(
+                        "TTC compression failed (%s); sending uncompressed.", exc
+                    )
             response = original_create(*args, **kwargs)
 
             if web_search:
@@ -307,10 +452,11 @@ def with_compression(
                     sync_ttc,
                     model,
                     stats,
-                    compressor,
+                    None,
                     role_aggr,
                     system_aggr,
                     strip_server_tool_results,
+                    _effective_max_uses(web_search_max_uses, native_max_uses),
                 )
 
             return response

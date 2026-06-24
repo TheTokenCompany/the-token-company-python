@@ -33,6 +33,39 @@ class CompressResponse:
 
 
 @dataclass(frozen=True, slots=True)
+class ChatCompressResponse:
+    """Result of a batch chat-compression request (the whole message array)."""
+
+    messages: list[Any]
+    system: Any | None
+    input_tokens: int
+    output_tokens: int
+    cache_hits: int
+    cache_misses: int
+    compression_time: float
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ChatCompressResponse:
+        return cls(
+            messages=data["messages"],
+            system=data.get("system"),
+            input_tokens=data.get("original_input_tokens", 0),
+            output_tokens=data.get("output_tokens", 0),
+            cache_hits=data.get("cache_hits", 0),
+            cache_misses=data.get("cache_misses", 0),
+            compression_time=data.get("compression_time", 0),
+        )
+
+    @property
+    def messages_compressed(self) -> int:
+        return self.cache_hits + self.cache_misses
+
+    @property
+    def tokens_saved(self) -> int:
+        return self.input_tokens - self.output_tokens
+
+
+@dataclass(frozen=True, slots=True)
 class SearchResult:
     """A single compressed web search result."""
 
@@ -105,6 +138,18 @@ class CompressionStats:
 
     def _record(self, response: CompressResponse) -> None:
         self._accumulator.append(response)
+
+    def _record_chat(self, response: ChatCompressResponse) -> None:
+        """Record a whole-conversation batch compression as one turn."""
+        self.history.append(
+            TurnStats(
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                tokens_saved=response.tokens_saved,
+                messages_compressed=response.messages_compressed,
+                timestamp=time.time(),
+            )
+        )
 
     def _record_search(self, response: SearchResponse) -> None:
         self.history.append(

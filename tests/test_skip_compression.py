@@ -324,23 +324,32 @@ class TestSkipInSyncWrapper:
         assert not search_content_compressed
 
     def test_web_search_false_still_compresses_tool_results(self) -> None:
-        from tests.test_web_search import _mock_compress_response, _text_response
+        from tests.test_web_search import _text_response
+        from thetokencompany._types import ChatCompressResponse
         from thetokencompany.anthropic import with_compression
 
         mock_client = MagicMock()
         original_create = MagicMock(return_value=_text_response())
         mock_client.messages.create = original_create
 
-        compress_calls: list[str] = []
+        sent: list[tuple[list, dict]] = []
 
         with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
             mock_ttc = MockTTC.return_value
 
-            def tracking_compress(text: str, **kw: Any) -> CompressResponse:
-                compress_calls.append(text)
-                return _mock_compress_response(text)
+            def tracking_chat(messages: list, **kw: Any) -> ChatCompressResponse:
+                sent.append((messages, kw))
+                return ChatCompressResponse(
+                    messages=messages,
+                    system=kw.get("system"),
+                    input_tokens=20,
+                    output_tokens=5,
+                    cache_hits=0,
+                    cache_misses=len(messages),
+                    compression_time=0.0,
+                )
 
-            mock_ttc.compress.side_effect = tracking_compress
+            mock_ttc.compress_chat.side_effect = tracking_chat
 
             wrapped = with_compression(
                 mock_client,
@@ -375,4 +384,11 @@ class TestSkipInSyncWrapper:
                 ],
             )
 
-        assert any("search data" in c for c in compress_calls)
+        # With web_search=False nothing is skipped: the tool_result is sent to
+        # the server for compression (skip list empty), in a single call.
+        assert len(sent) == 1
+        messages, kw = sent[0]
+        assert not kw.get("skip_tool_use_ids")
+        tool_result = messages[1]["content"][0]
+        assert tool_result["type"] == "tool_result"
+        assert tool_result["content"] == "search data"

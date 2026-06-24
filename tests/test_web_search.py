@@ -8,7 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from thetokencompany._types import CompressResponse, SearchResponse, SearchResult
+from thetokencompany._types import (
+    ChatCompressResponse,
+    CompressResponse,
+    SearchResponse,
+    SearchResult,
+)
 from thetokencompany.anthropic import (
     _format_search_results,
     _has_ttc_search_use,
@@ -21,6 +26,32 @@ def _mock_compress_response(text: str) -> CompressResponse:
         output=f"[compressed]{text}",
         output_tokens=5,
         input_tokens=20,
+    )
+
+
+def _chat_echo(messages: list, **kwargs: object) -> ChatCompressResponse:
+    """Echo messages back (server-side compression is mocked away here)."""
+    return ChatCompressResponse(
+        messages=messages,
+        system=kwargs.get("system"),
+        input_tokens=20,
+        output_tokens=5,
+        cache_hits=0,
+        cache_misses=len(messages),
+        compression_time=0.0,
+    )
+
+
+def _chat_noop(messages: list, **kwargs: object) -> ChatCompressResponse:
+    """Echo with zero token savings, to isolate web-search savings in stats."""
+    return ChatCompressResponse(
+        messages=messages,
+        system=kwargs.get("system"),
+        input_tokens=10,
+        output_tokens=10,
+        cache_hits=0,
+        cache_misses=len(messages),
+        compression_time=0.0,
     )
 
 
@@ -548,7 +579,7 @@ class TestWebSearchSyncWrapper:
 
         with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
             mock_ttc = MockTTC.return_value
-            mock_ttc.compress.return_value = _mock_compress_response("x")
+            mock_ttc.compress_chat.side_effect = _chat_echo
             mock_ttc.search.return_value = _make_search_response()
 
             wrapped = with_compression(
@@ -562,13 +593,13 @@ class TestWebSearchSyncWrapper:
                 messages=[{"role": "user", "content": "What is the news?"}],
             )
 
-        # With no system prompt and 1 user message, only 1 compress call
-        # should happen (the initial user message). The search loop should
-        # NOT re-compress: the user message was already compressed, and the
-        # search results arrive pre-compressed from /v1/search.
-        total_compress_calls = mock_ttc.compress.call_count
+        # The whole conversation is compressed in a single call before the
+        # provider request. The search loop must NOT compress again: the
+        # initial messages were already compressed and /v1/search results
+        # arrive pre-compressed.
+        total_compress_calls = mock_ttc.compress_chat.call_count
         assert total_compress_calls == 1, (
-            f"Expected 1 compress API call (initial user message only), "
+            f"Expected 1 chat-compress API call (initial turn only), "
             f"got {total_compress_calls}. The search loop is re-compressing "
             "already-compressed messages, adding unnecessary latency."
         )
@@ -595,10 +626,8 @@ class TestWebSearchSyncWrapper:
 
         with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
             mock_ttc = MockTTC.return_value
-            # Make compress a no-op so we isolate search savings
-            mock_ttc.compress.return_value = CompressResponse(
-                output="same", output_tokens=10, input_tokens=10
-            )
+            # Make message compression a no-op so we isolate search savings
+            mock_ttc.compress_chat.side_effect = _chat_noop
             # Search returns 1000 input tokens compressed to 700 = 300 saved
             mock_ttc.search.return_value = SearchResponse(
                 results=[
@@ -636,6 +665,144 @@ class TestWebSearchSyncWrapper:
         )
 
 
+def _eager_search_model():
+    """An Anthropic stub that wants to search on EVERY turn, but (like a real
+    model) stops and answers once a search comes back as an error — which is how
+    the budget cap signals 'no more searches' per query."""
+    from unittest.mock import MagicMock
+
+    def create(**kwargs):
+        last = (kwargs.get("messages") or [])[-1:] or [None]
+        content = last[0].get("content") if isinstance(last[0], dict) else None
+        if isinstance(content, list) and any(
+            isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error")
+            for b in content
+        ):
+            return _text_response("Final answer.")  # budget hit -> answer
+        return _MockResponse(
+            stop_reason="tool_use",
+            content=[_ContentBlock(type="tool_use", name="ttc_web_search",
+                                   id="toolu_x", input={"query": "q"})],
+        )
+
+    client = MagicMock()
+    client.messages.create = create
+    return client
+
+
+class TestWebSearchMaxUses:
+    def test_explicit_cap_stops_runaway_loop(self) -> None:
+        from thetokencompany.anthropic import with_compression
+
+        client = _eager_search_model()
+        with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
+            mock_ttc = MockTTC.return_value
+            mock_ttc.compress_chat.side_effect = _chat_echo
+            mock_ttc.search.return_value = _make_search_response()
+
+            wrapped = with_compression(client, compression_api_key="ttc-test",
+                                       web_search=True, web_search_max_uses=3)
+            resp = wrapped.messages.create(
+                model="claude-sonnet-4-6", max_tokens=1024,
+                messages=[{"role": "user", "content": "research deeply"}],
+            )
+
+        # The model would search forever; the cap stops it at exactly 3.
+        assert mock_ttc.search.call_count == 3
+        assert resp.stop_reason == "end_turn"  # forced to answer
+
+    def test_default_cap_applies_without_arg(self) -> None:
+        from thetokencompany.anthropic import DEFAULT_WEB_SEARCH_MAX_USES, with_compression
+
+        client = _eager_search_model()
+        with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
+            mock_ttc = MockTTC.return_value
+            mock_ttc.compress_chat.side_effect = _chat_echo
+            mock_ttc.search.return_value = _make_search_response()
+
+            wrapped = with_compression(client, compression_api_key="ttc-test", web_search=True)
+            wrapped.messages.create(
+                model="claude-sonnet-4-6", max_tokens=1024,
+                messages=[{"role": "user", "content": "research"}],
+            )
+
+        assert mock_ttc.search.call_count == DEFAULT_WEB_SEARCH_MAX_USES
+
+    def test_native_max_uses_is_honored(self) -> None:
+        from thetokencompany.anthropic import with_compression
+
+        client = _eager_search_model()
+        with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
+            mock_ttc = MockTTC.return_value
+            mock_ttc.compress_chat.side_effect = _chat_echo
+            mock_ttc.search.return_value = _make_search_response()
+
+            wrapped = with_compression(client, compression_api_key="ttc-test", web_search=True)
+            # Caller passes the native web_search tool with its own max_uses=2;
+            # web_search=True swaps in ttc_web_search but keeps the cap.
+            wrapped.messages.create(
+                model="claude-sonnet-4-6", max_tokens=1024,
+                messages=[{"role": "user", "content": "research"}],
+                tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}],
+            )
+
+        assert mock_ttc.search.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Graceful degradation: a compression-backend fault must never break the
+# customer's underlying LLM call.
+# ---------------------------------------------------------------------------
+
+
+class TestCompressionGracefulDegradation:
+    def test_sync_compress_failure_falls_through_uncompressed(self) -> None:
+        from thetokencompany.anthropic import with_compression
+
+        mock_client = MagicMock()
+        original_create = MagicMock(return_value=_text_response("ok"))
+        mock_client.messages.create = original_create
+        original_messages = [{"role": "user", "content": "hello"}]
+
+        with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
+            mock_ttc = MockTTC.return_value
+            mock_ttc.compress_chat.side_effect = RuntimeError("backend 503")
+
+            wrapped = with_compression(mock_client, compression_api_key="ttc-test")
+            result = wrapped.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                messages=original_messages,
+            )
+
+        # The customer's call still succeeds, with the ORIGINAL messages.
+        assert result.stop_reason == "end_turn"
+        assert original_create.call_args[1]["messages"] == original_messages
+
+    @pytest.mark.asyncio
+    async def test_async_compress_failure_falls_through_uncompressed(self) -> None:
+        from thetokencompany.anthropic import with_compression
+
+        mock_client = MagicMock()
+        original_create = AsyncMock(return_value=_text_response("ok"))
+        mock_client.messages.create = original_create
+        original_messages = [{"role": "user", "content": "hello"}]
+
+        with patch("thetokencompany.anthropic.AsyncTheTokenCompany") as MockTTC:
+            mock_ttc = MockTTC.return_value
+            mock_ttc.compress_chat = AsyncMock(side_effect=RuntimeError("backend 503"))
+
+            wrapped = with_compression(mock_client, compression_api_key="ttc-test")
+            result = await wrapped.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                messages=original_messages,
+            )
+
+        assert result.stop_reason == "end_turn"
+        assert original_create.call_args[1]["messages"] == original_messages
+
+
 # ---------------------------------------------------------------------------
 # Integration tests for async wrapper
 # ---------------------------------------------------------------------------
@@ -655,9 +822,7 @@ class TestWebSearchAsyncWrapper:
             "thetokencompany.anthropic.AsyncTheTokenCompany",
         ) as MockTTC:
             mock_ttc = MockTTC.return_value
-            mock_ttc.compress = AsyncMock(
-                return_value=_mock_compress_response("x"),
-            )
+            mock_ttc.compress_chat = AsyncMock(side_effect=_chat_echo)
 
             wrapped = with_compression(
                 mock_client,
@@ -690,9 +855,7 @@ class TestWebSearchAsyncWrapper:
             "thetokencompany.anthropic.AsyncTheTokenCompany",
         ) as MockTTC:
             mock_ttc = MockTTC.return_value
-            mock_ttc.compress = AsyncMock(
-                return_value=_mock_compress_response("x"),
-            )
+            mock_ttc.compress_chat = AsyncMock(side_effect=_chat_echo)
             mock_ttc.search = AsyncMock(
                 return_value=_make_search_response(query="async query"),
             )
