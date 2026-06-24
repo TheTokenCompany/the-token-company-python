@@ -123,7 +123,19 @@ class TheTokenCompany:
             self._client = http_client
             self._client.headers.update(headers)
         else:
-            self._client = httpx.Client(headers=headers, timeout=timeout)
+            # keepalive_expiry defaults to 5s in httpx — shorter than the model's
+            # think-gaps between agentic search rounds, so the connection would be
+            # dropped and every round would pay a fresh TLS handshake (expensive on
+            # high-latency links). 300s keeps it warm across the whole run.
+            self._client = httpx.Client(
+                headers=headers,
+                timeout=timeout,
+                limits=httpx.Limits(
+                    max_keepalive_connections=32,
+                    max_connections=128,
+                    keepalive_expiry=300.0,
+                ),
+            )
 
     def _encode(self, payload: dict[str, Any]) -> bytes:
         raw = json.dumps(payload).encode()
