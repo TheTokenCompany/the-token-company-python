@@ -300,7 +300,10 @@ def with_compression(
 ) -> Any:
     """Wrap an Anthropic client to auto-compress messages.
 
-    Compresses the ``system`` parameter and all non-assistant messages.
+    Compresses the ``system`` parameter and all conversation turns — user,
+    tool, and assistant/agent — by default. To keep the provider's KV cache
+    warm, pass a per-role ``aggressiveness`` dict that omits the ``assistant``
+    key (e.g. ``{"user": 0.2, "system": 0.2, "tool": 0.2}``).
 
     Compression stats are available on ``client.compression``::
 
@@ -309,10 +312,11 @@ def with_compression(
         print(client.compression.total_tokens_saved)
 
     Args:
-        compress_assistant: When ``True``, also compress text blocks in
-            assistant messages. Useful for multi-turn conversations where
-            previous assistant responses (e.g. from web search) are large.
-            Defaults to ``False`` to preserve the provider's KV cache.
+        compress_assistant: Deprecated / redundant — assistant (agent) turns
+            are now compressed by default. Kept for back-compat: forces the
+            ``assistant`` role back on when a per-role ``aggressiveness`` dict
+            omits it. To exclude assistant turns, pass a dict without the
+            ``assistant`` key instead.
         strip_server_tool_results: When ``True``, remove server-side tool
             result blocks (e.g. ``web_search_tool_result``) from assistant
             messages before sending. This can significantly reduce input

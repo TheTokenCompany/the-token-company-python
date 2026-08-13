@@ -31,7 +31,7 @@ def _chat_echo(messages: list, **kwargs: object) -> ChatCompressResponse:
 class TestResolveAggressiveness:
     def test_float_expands_to_default_roles(self) -> None:
         result = _resolve_aggressiveness(0.3)
-        assert result == {"user": 0.3, "system": 0.3, "tool": 0.3}
+        assert result == {"user": 0.3, "system": 0.3, "tool": 0.3, "assistant": 0.3}
 
     def test_dict_passed_through(self) -> None:
         d = {"user": 0.5, "system": 0.1}
@@ -62,6 +62,23 @@ class TestOpenAIMessages:
         assert result[0]["content"] == "[c]hello"
         assert result[1]["content"] == "hi there"
         assert result[2]["content"] == "[c]bye"
+
+    def test_assistant_compressed_when_role_present(self) -> None:
+        from thetokencompany._compress import compress_openai_messages
+
+        with patch("thetokencompany._compress.compress_text") as mock_ct:
+            mock_ct.side_effect = lambda _t, text, _m, _a: f"[c]{text}"
+            messages = [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "a long agent response"},
+            ]
+            ttc = MagicMock()
+            result = compress_openai_messages(
+                ttc, messages, "bear-2", {"user": 0.2, "assistant": 0.3}
+            )
+
+        assert result[0]["content"] == "[c]hello"
+        assert result[1]["content"] == "[c]a long agent response"
 
     def test_tool_role_compressed(self) -> None:
         from thetokencompany._compress import compress_openai_messages
@@ -179,6 +196,28 @@ class TestAnthropicMessages:
 
         assert result[0]["content"] == "[c]hello"
         assert result[1]["content"] == "hi there"
+
+    def test_assistant_compressed_when_role_present(self) -> None:
+        from thetokencompany._compress import compress_anthropic_messages
+
+        with patch("thetokencompany._compress.compress_text") as mock_ct:
+            mock_ct.side_effect = lambda _t, text, _m, _a: f"[c]{text}"
+            messages = [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "a long agent response"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "a text block"}],
+                },
+            ]
+            ttc = MagicMock()
+            result = compress_anthropic_messages(
+                ttc, messages, "bear-2", {"user": 0.2, "assistant": 0.3}
+            )
+
+        assert result[0]["content"] == "[c]hello"
+        assert result[1]["content"] == "[c]a long agent response"
+        assert result[2]["content"][0]["text"] == "[c]a text block"
 
     def test_tool_result_blocks_compressed(self) -> None:
         from thetokencompany._compress import compress_anthropic_messages
@@ -310,6 +349,50 @@ class TestOpenAIWrapper:
         # The whole conversation goes in a single call, not one per message.
         assert mock_ttc.compress_chat.call_count == 1
         assert mock_ttc.compress_chat.call_args.kwargs["fmt"] == "openai"
+
+    def test_assistant_compressed_by_default(self) -> None:
+        from thetokencompany.openai import with_compression
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = MagicMock(return_value="response")
+
+        with patch("thetokencompany.openai.TheTokenCompany") as MockTTC:
+            mock_ttc = MockTTC.return_value
+            mock_ttc.compress_chat.side_effect = _chat_echo
+
+            wrapped = with_compression(mock_client, compression_api_key="ttc-test")
+            wrapped.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        # Default (scalar) aggressiveness must send the assistant role too.
+        sent = mock_ttc.compress_chat.call_args.kwargs
+        assert sent["aggressiveness"]["assistant"] == 0.2
+
+    def test_dict_without_assistant_omits_it(self) -> None:
+        from thetokencompany.openai import with_compression
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = MagicMock(return_value="response")
+
+        with patch("thetokencompany.openai.TheTokenCompany") as MockTTC:
+            mock_ttc = MockTTC.return_value
+            mock_ttc.compress_chat.side_effect = _chat_echo
+
+            wrapped = with_compression(
+                mock_client,
+                compression_api_key="ttc-test",
+                aggressiveness={"user": 0.2, "system": 0.2, "tool": 0.2},
+            )
+            wrapped.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        # KV-cache opt-out: a per-role dict without "assistant" excludes it.
+        sent = mock_ttc.compress_chat.call_args.kwargs
+        assert "assistant" not in sent["aggressiveness"]
 
     @pytest.mark.asyncio
     async def test_async(self) -> None:
@@ -636,6 +719,31 @@ class TestAnthropicWrapperOptions:
         # to the server, so the server compresses assistant text too.
         sent = mock_ttc.compress_chat.call_args.kwargs
         assert "assistant" in sent["aggressiveness"]
+
+    def test_assistant_compressed_by_default(self) -> None:
+        from thetokencompany.anthropic import with_compression
+
+        mock_client = MagicMock()
+        mock_client.messages.create = MagicMock(return_value="response")
+
+        with patch("thetokencompany.anthropic.TheTokenCompany") as MockTTC:
+            mock_ttc = MockTTC.return_value
+            mock_ttc.compress_chat.side_effect = _chat_echo
+
+            wrapped = with_compression(mock_client, compression_api_key="ttc-test")
+            wrapped.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                messages=[
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "long agent text"},
+                    {"role": "user", "content": "follow up"},
+                ],
+            )
+
+        # No compress_assistant flag needed — assistant is on by default now.
+        sent = mock_ttc.compress_chat.call_args.kwargs
+        assert sent["aggressiveness"]["assistant"] == 0.2
 
     def test_strip_server_tool_results_in_wrapper(self) -> None:
         from thetokencompany.anthropic import with_compression

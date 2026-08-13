@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "the-token-company"
-version = "0.4.1"
+version = "0.5.0"
 description = "Python SDK for The Token Company — compress LLM prompts to reduce costs and latency"
 readme = "README.md"
 license = "MIT"

@@ -40,7 +40,9 @@ def with_compression(
         client.chat.completions.create(...)
         print(client.compression.total_tokens_saved)
 
-    Assistant messages are never compressed to preserve the provider's KV cache.
+    Assistant/agent turns are compressed by default. To keep the provider's KV
+    cache warm, pass a per-role ``aggressiveness`` dict that omits the
+    ``assistant`` key (e.g. ``{"user": 0.2, "system": 0.2, "tool": 0.2}``).
     """
     role_aggr = _resolve_aggressiveness(aggressiveness)
     stats = CompressionStats()
