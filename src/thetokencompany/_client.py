@@ -113,22 +113,24 @@ class TheTokenCompany:
         self._base_url = base_url.rstrip("/")
         self._gzip = gzip
         self._app_id = app_id
-        headers: dict[str, str] = {
+        # TTC auth/compression headers are applied per-request (see _post), never
+        # written to the client's global defaults. Mutating a caller-supplied
+        # client would leak the bearer key to every other origin that client is
+        # later reused for.
+        self._headers: dict[str, str] = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
         if gzip:
-            headers["Content-Encoding"] = "gzip"
+            self._headers["Content-Encoding"] = "gzip"
         if http_client is not None:
             self._client = http_client
-            self._client.headers.update(headers)
         else:
             # keepalive_expiry defaults to 5s in httpx — shorter than the model's
             # think-gaps between agentic search rounds, so the connection would be
             # dropped and every round would pay a fresh TLS handshake (expensive on
             # high-latency links). 300s keeps it warm across the whole run.
             self._client = httpx.Client(
-                headers=headers,
                 timeout=timeout,
                 limits=httpx.Limits(
                     max_keepalive_connections=32,
@@ -169,6 +171,7 @@ class TheTokenCompany:
         response = self._client.post(
             f"{self._base_url}/v1/compress",
             content=self._encode(payload),
+            headers=self._headers,
         )
         if not response.is_success:
             raise _parse_error(response)
@@ -217,6 +220,7 @@ class TheTokenCompany:
         response = self._client.post(
             f"{self._base_url}/v1/chat/compress",
             content=self._encode(payload),
+            headers=self._headers,
         )
         if not response.is_success:
             raise _parse_error(response)
@@ -261,6 +265,7 @@ class TheTokenCompany:
         response = self._client.post(
             f"{self._base_url}/v1/search",
             content=self._encode(payload),
+            headers=self._headers,
         )
         if not response.is_success:
             raise _parse_error(response)
