@@ -10,7 +10,10 @@ from thetokencompany._client import TheTokenCompany
 from thetokencompany._types import CompressionStats, CompressResponse
 
 DEFAULT_AGGRESSIVENESS = 0.2
-DEFAULT_ROLES = ("user", "system", "tool")
+# Assistant/agent turns are compressed by default alongside user/system/tool.
+# To keep the provider's KV cache warm, pass a per-role aggressiveness dict that
+# omits the "assistant" key (see _resolve_aggressiveness).
+DEFAULT_ROLES = ("user", "system", "tool", "assistant")
 _SERVER_TOOL_BLOCK_TYPES = frozenset({"web_search_tool_result", "server_tool_use"})
 
 Aggressiveness = float | dict[str, float]

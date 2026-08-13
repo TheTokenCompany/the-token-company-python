@@ -34,7 +34,7 @@ print(result.compression_ratio)  # e.g. 1.8
 
 ## SDK wrappers
 
-Drop-in wrappers that auto-compress all non-assistant messages before sending to your LLM. Assistant messages pass through unchanged so the provider's KV cache stays warm.
+Drop-in wrappers that auto-compress conversation turns before sending to your LLM. By default every turn — user, system, tool, and assistant/agent — is compressed. To keep the provider's KV cache warm, pass a per-role `aggressiveness` dict that omits the `assistant` key (e.g. `{"user": 0.2, "system": 0.2, "tool": 0.2}`).
 
 ### OpenAI / OpenRouter
 
